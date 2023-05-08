@@ -6,9 +6,5 @@
 		"dev": "node server.js dev",
 		"build": "node server.js build",
 		"start": "node server.js start"
-	},
-	"dependencies": {
-		"alea": "^1.0.1",
-		"simplex-noise": "^4.0.1"
 	}
 }
