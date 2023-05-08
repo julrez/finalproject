@@ -16,7 +16,6 @@ struct Constants {
 @group(0) @binding(3) var<storage, read> accelerationBuffer: array<u32>;
 @group(0) @binding(4) var depthTexture: texture_2d<f32>;
 @group(0) @binding(5) var colorTexture: texture_2d<f32>;
-@group(0) @binding(6) var s: sampler;
 
 /*
 @group(1) @binding(0) var<storage, read_write> debugInfo: DebugMsgInfo;

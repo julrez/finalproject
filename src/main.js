@@ -160,12 +160,6 @@ async function compute_test()
 		mipmapFilter: "linear",
 	});
 	
-	let nearestSampler = device.createSampler({
-		magFilter: "nearest",
-		minFilter: "nearest",
-		mipmapFilter: "nearest",
-	});
-	
 	let pass2Texture = device.createTexture({
 		size: {
 			width: canvas.width,
@@ -572,11 +566,6 @@ async function compute_test()
 						sampleType: "float",
 						viewDimension: "2d",
 					}
-				},
-				{
-					binding: 6,
-					visibility: GPUShaderStage.COMPUTE,
-					sampler: { }
 				}
 			],
 		});
@@ -613,10 +602,6 @@ async function compute_test()
 				{
 					binding: 5,
 					resource: pass2TextureView,
-				},
-				{
-					binding: 6,
-					resource: nearestSampler,
 				}
 			]
 		});
