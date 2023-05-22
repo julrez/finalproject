@@ -11,6 +11,10 @@ let releaseFlags = " -O3 -g -fdebug-compilation-dir='../../'";
 let memoryFlags = " -s ALLOW_MEMORY_GROWTH=1";
 let emccFlags = "-Wall -Wextra -Wdouble-promotion -msimd128 -pthread -s WASM=1 -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency -s EXPORTED_RUNTIME_METHODS=[\"cwrap\",\"ccall\"] -s EXPORTED_FUNCTIONS=[\"_malloc\"]" + memoryFlags + releaseFlags;
 
+let compile = true;
+
+let address = 8081;
+
 function get_filenames(callback)
 {
 }
@@ -24,7 +28,7 @@ function compile_files(callback)
 		let finishCount = 0;
 		for (let i = 0; i < filenames.length; i++) {
 			let type = filenames[i].split('.').pop();
-			if (type == 'c') {
+			if (type == 'c' && compile) {
 				let command = "emcc " + emccFlags + " src/" + filenames[i] + " -o out/" + filenames[i] + ".js";
 				console.log("compiling: " + filenames[i]);
 				console.log(command);
@@ -90,7 +94,7 @@ function read_files(callback)
 }
 
 function create_server() {
-	console.log("address: \x1b[32mlocalhost:8080\x1b[0m");
+	console.log("address: \x1b[32mlocalhost:"+address+"\x1b[0m");
 	http.createServer(function (request, response) {
 		if (request.url == '/') {
 			response.writeHead(200, {
@@ -133,7 +137,7 @@ function create_server() {
 				return response.end();
 			}
 		}
-	}).listen(8080);
+	}).listen(address);
 }
 
 function option_dev()
@@ -156,5 +160,9 @@ function option_dev()
 	}
 }
 
-console.log(process.argv);
+let type = process.argv[2];
+console.log(type);
+if (type != "dev") {
+	compile = false;
+}
 option_dev();
