@@ -1,48 +1,27 @@
 #include <stdio.h>
-
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <math.h>
+
+#include <pthread.h>
 
 #include <emscripten.h>
-#include <pthread.h>
 #include <emscripten/threading.h>
-// NOTE: emscripten_thread_sleep sleeps
 
 #include <wasm_simd128.h>
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 
-enum JobType {
-	JOB_GENERATE_NOISE,
-	JOB_MOVE,
-	JOB_GENERATE_CHUNK
-} type;
+// world coords of 0,0,0 in accelerationBufferData
+uint32_t xWorld;
+uint32_t yWorld;
+uint32_t zWorld;
+uint32_t seed;
 
-struct Job {
-	enum JobType type;
-	void *jobInfo;
-};
-
-struct JobList {
-	struct Job *array;
-	uint32_t allocated;
-	uint32_t count;
-	uint32_t current;
-	uint32_t done;
-};
-
-struct JobSystem {
-	struct JobList *highPriority;
-	struct JobList *lowPriority;
-};
-
-struct SharedWithJS {
-	uint32_t shouldUpdate;
-	uint8_t *updateAccelerationBufferData;
-	uint8_t *updateChunkBufferData;
-} sharedWithJS;
-
+uint32_t accelerationBufferSize;
+uint32_t chunkBufferSize;
 
 /*
  * useful things:
@@ -53,16 +32,27 @@ struct SharedWithJS {
 		pthread_detach(thread);
  * to get the time in milliseconds (as a double)
 		double time = emscripten_get_now();
+ * NOTE: emscripten_thread_sleep sleeps
  *
  */
+
+struct GameSettings {
+	uint16_t loadDistance;
+} gameSettings;
 
 uint16_t *heightMap;
 uint32_t heightMapDimension;
 
+// byte 0: acceleration start
+// byte 1: acceleration end
+uint16_t *accelerationHeightMap;
+
 uint32_t *accelerationBufferData;
 uint32_t *chunkBufferData;
 uint32_t maxChunkCount;
-uint32_t chunkCount = 0;
+uint32_t chunkCount;
+
+uint32_t targetLoadDistance = 30;
 
 struct Border {
 	uint32_t xNeg;
@@ -73,58 +63,720 @@ struct Border {
 	uint32_t zPos;
 } border;
 
+struct SharedWithJS {
+	float cameraPosX;
+	float cameraPosY;
+	float cameraPosZ;
+
+	float cameraAxisX;
+	float cameraAxisY;
+	float cameraAxisZ;
+} sharedWithJS;
+
+// also shared with JS
+struct UpdateStructure {
+	// circular buffers
+	volatile uint32_t *ucIndices;
+	volatile uint32_t *uaIndices;
+	
+	// actual size subtracted by 1
+	uint32_t ucIndicesCount;
+	uint32_t uaIndicesCount;
+
+	volatile uint32_t ucWriteIndex;
+	volatile uint32_t ucReadIndex;
+	volatile uint32_t uaWriteIndex;
+	volatile uint32_t uaReadIndex;
+
+	// 0 = normal
+	// 1 = the called function is currently transform()
+	// 2 = transform() has been called, waiting for JS
+	uint32_t transformState;
+	uint32_t copyChunkCount;
+} updateStructure;
+
+// octree pointing to chunks
+struct Octree {
+	uint32_t allocationCount;
+	uint32_t count;
+	// index to next node or 0
+	uint32_t *indices;
+	void *data;
+};
+
+struct Octree generationOctree;
+
+// for debug. TODO: remove
+uint32_t uaCount = 0;
+uint32_t ucCount = 0;
+
+uint32_t octree_generate_chunks_recursive(
+		struct Octree *octree,
+		float targetDistance2,
+		uint32_t currentSet,
+		uint16_t x, uint16_t y, uint16_t z,
+		uint16_t voxelSize);
+void octree_generate_chunks();
+uint32_t octree_optimize_acceleration(
+		struct Octree *octree,
+		float targetDistance2,
+		uint32_t currentSet,
+		uint16_t x, uint16_t y, uint16_t z,
+		uint16_t voxelSize);
+__attribute__((used)) void *create_chunks(
+		uint32_t accelerationBufferSize, uint32_t chunkBufferSize);
+void ua_push_index(uint32_t accelerationIndex);
+void uc_push_index(uint32_t accelerationIndex);
+void uc_reset();
+void ua_reset();
+void update_structure_initialize();
+float perlin_fade_function(float t);
+float lerp(float v0, float v1, float t);
+void generate_heightmap(uint32_t dim);
+void chunk_create_from_2dnoise(
+		uint32_t inax, uint32_t inay, uint32_t inaz);
+void acceleration_area_create_from_2dnoise_version_2(
+		uint32_t inax, uint32_t inaz);
+void border_area_create_from_2dnoise(
+		uint32_t inax, uint32_t inaz,
+		struct Border newBorder,
+		struct Border oldBorder);
+void border_area_optimize_acceleration(
+		uint32_t inax, uint32_t inaz,
+		struct Border newBorder,
+		struct Border oldBorder);
+void load_new_chunks();
+void job_thread();
+uint16_t sat_get_element(
+		uint16_t *sat,
+		uint32_t dim,
+		uint32_t x,
+		uint32_t y,
+		uint32_t z);
+uint16_t sat_get_sum(uint16_t *sat, uint16_t dim,
+		uint16_t x1, uint16_t y1, uint16_t z1,
+		uint16_t x2, uint16_t y2, uint16_t z2);
+uint16_t sat_2d_get_sum(
+		uint16_t *sat, uint16_t dim,
+		uint16_t x0, uint16_t y0,
+		uint16_t x1, uint16_t y1);
+void chunk_area_calculate_df(uint16_t inax, uint16_t inay, uint16_t inaz);
+void acceleration_area_calculate_df(uint16_t inax, uint16_t inay, uint16_t inaz);
+void chunk_create_empty(uint32_t inax, uint32_t inay, uint32_t inaz);
+
+bool border_completely_inside_border(struct Border inside, struct Border outside);
+
+void create_octree(
+		struct Octree *octree,
+		uint32_t allocationCount,
+		uint32_t dataAllocationCount);
+
+// remakes accelerationBufferData with a new center
+void transform();
+
+struct ReturnedNode {
+	uint32_t index;
+	uint32_t voxelSize;
+	uint16_t x;
+	uint16_t y;
+	uint16_t z;
+};
+struct ReturnedNode get_octree_node(
+		struct Octree *octree,
+		uint16_t targetX, uint16_t targetY, uint16_t targetZ,
+		uint16_t targetLevel);
+struct ReturnedNode force_octree_node(
+		struct Octree *octree,
+		uint16_t targetX, uint16_t targetY, uint16_t targetZ,
+		uint16_t targetLevel);
+
+// Dan bernstein hash function
+uint32_t djb33_hash(const char* s, size_t len)
+{
+    uint32_t h = 5381;
+    while (len--) {
+        /* h = 33 * h ^ s[i]; */
+        h += (h << 5);  
+        h ^= *s++;
+    }
+    return h;
+}
+float distance2_point_to_cube(
+		uint16_t cubeX,
+		uint16_t cubeY,
+		uint16_t cubeZ,
+		uint16_t voxelSize,
+		float pointX, float pointY, float pointZ)
+{
+	uint16_t centerX = cubeX+(voxelSize>>1);
+	uint16_t centerY = cubeY+(voxelSize>>1);
+	uint16_t centerZ = cubeZ+(voxelSize>>1);
+
+	uint16_t halfVoxelSize = voxelSize>>1;
+
+	float dx = MAX(fabsf(centerX-pointX) - (float)halfVoxelSize, 0.0f);
+	float dy = MAX(fabsf(centerY-pointY) - (float)halfVoxelSize, 0.0f);
+	float dz = MAX(fabsf(centerZ-pointZ) - (float)halfVoxelSize, 0.0f);
+
+	return dx*dx + dy*dy + dz*dz;
+}
+
+uint32_t *tmp;
+uint32_t tmpCount;
+
+void octree_generate_chunks()
+{
+	if (tmp == 0) {
+		tmp  = malloc(256*256*256*4);
+	}
+	float targetDistance2 = (float)gameSettings.loadDistance
+		*(float)gameSettings.loadDistance;
+	tmpCount = 0;
+	// first 512 bits used as lookup used to know
+	// if acceleration_area_calculate_df is necessary
+	// 1 bit = 1 bool in 8x8x8 grid
+	octree_generate_chunks_recursive(
+			&generationOctree, targetDistance2, 0, 0, 0, 0, 1 << 10);
+	// generate acceleration df
+}
+
+uint32_t octree_generate_chunks_recursive(
+		struct Octree *octree,
+		float targetDistance2,
+		uint32_t currentSet,
+		uint16_t x, uint16_t y, uint16_t z,
+		uint16_t voxelSize)
+{
+	// 0 == nothing has been generated
+	// 8 == all 8 2d leaves have been generated
+	uint8_t *progress2DGeneration = &((uint8_t*)octree->data)[512];
+
+	// sqrt(3)
+	//const float largestDistanceMultiplier = 1.73205080757f;
+
+	uint32_t progressChange = 0;
+	for (uint8_t cube = 0; cube < 8; cube++) {
+		uint32_t currentNode = currentSet+cube;
+		uint16_t newX = x+(-(cube&1) & voxelSize);
+		uint16_t newY = y+((-(cube&2)>>1) & voxelSize);
+		uint16_t newZ = z+((-(cube&4)>>2) & voxelSize);
+
+		float distance2 = distance2_point_to_cube(
+				newX, newY, newZ, voxelSize,
+				sharedWithJS.cameraPosX,
+				sharedWithJS.cameraPosY,
+				sharedWithJS.cameraPosZ);
+		if (distance2 > targetDistance2) {
+			continue;
+		}
+		if (progress2DGeneration[currentNode] > 7) {
+			continue;
+		}
+
+		if (voxelSize == 8) {
+			progress2DGeneration[currentNode] = 8;
+			uint32_t accelerationIndex = ((newZ>>3) << 16)
+				| ((newY>>3) << 8) | (newX>>3);
+			uint32_t oldVal = accelerationBufferData[accelerationIndex];
+
+			chunk_create_from_2dnoise(newX>>3, newY>>3, newZ>>3);
+			if (oldVal != accelerationBufferData[accelerationIndex]) {
+				// dont push index that has not gotten df generated yet
+				//ua_push_index(accelerationIndex);
+			}
+			acceleration_area_calculate_df((newX>>3)&~31, (newY>>3)&~31, (newZ>>3)&~31);
+
+			uint32_t index = ((newZ>>3)/32 *8*8)
+				| ((newY>>3) / 32 *8) | ((newX>>3) / 32);
+			((uint8_t*)generationOctree.data)[index] = 1;
+
+
+			continue;
+		}
+
+		uint32_t newSet = octree->indices[currentNode];
+		if (newSet == 0) {
+			newSet = octree->count;
+			octree->indices[currentNode] = newSet;
+			// NOTE: octree.indices[octree.count] -> octree.count+7
+			//       MUST be zero!
+			octree->count += 8;
+		}
+
+		uint32_t newProgressChange = octree_generate_chunks_recursive(
+			octree, targetDistance2,
+			newSet,
+			newX, newY, newZ,
+			voxelSize>>1
+		);
+		progress2DGeneration[currentNode] += newProgressChange;
+		if (newProgressChange == 8) {
+			progressChange += 1;
+		}
+	}
+	return progressChange;
+}
+// does not check for overflow! Should be done elsewhere
+// aka. do not create chunks if almost overflowing
+void ua_push_index(uint32_t accelerationIndex)
+{
+	uaCount++;
+	/*
+	emscripten_atomic_store_u32(
+			(void*)&accelerationBufferData[accelerationIndex],
+			accelerationBufferData[accelerationIndex]);
+			*/
+	// memory barrier
+	// make sure acceleration item is written to first
+	asm volatile("" : : : "memory");
+
+	emscripten_atomic_store_u32(
+			(void*)&updateStructure.uaIndices[updateStructure.uaWriteIndex],
+			accelerationIndex);
+
+	// make sure data is written to before showing the data to other threads
+	// by adding to writeIndex
+	asm volatile("" : : : "memory");
+
+	/*
+	updateStructure.uaWriteIndex = (updateStructure.uaWriteIndex+1)
+		& (updateStructure.uaIndicesCount);
+		*/
+	emscripten_atomic_store_u32(
+			(void*)&updateStructure.uaWriteIndex,
+			(updateStructure.uaWriteIndex+1)
+				% (updateStructure.uaIndicesCount));
+}
+
+void uc_push_index(uint32_t accelerationIndex)
+{
+	ucCount++;
+
+	emscripten_atomic_store_u32(
+			(void*)&updateStructure.ucIndices[updateStructure.ucWriteIndex],
+			accelerationIndex);
+	
+	asm volatile("" : : : "memory");
+	/*
+	updateStructure.ucWriteIndex = (updateStructure.ucWriteIndex+1)
+		& (updateStructure.ucIndicesCount);
+		*/
+	emscripten_atomic_store_u32(
+		(void*)&updateStructure.ucWriteIndex,
+		(updateStructure.ucWriteIndex+1)
+			% (updateStructure.ucIndicesCount));
+}
+
+void uc_reset()
+{
+	ucCount = 0;
+
+	updateStructure.ucWriteIndex = 0;
+	updateStructure.ucReadIndex = 0;
+}
+
+void ua_reset()
+{
+	uaCount = 0;
+
+	updateStructure.uaWriteIndex = 0;
+	updateStructure.uaReadIndex = 0;
+}
+
+void update_structure_initialize()
+{
+	// big values just to be safe. MUST be a power of 2 with 1 subtracted!
+	//updateStructure.ucIndicesCount = (1 << 24) - 1;
+	updateStructure.ucIndicesCount = (1 << 24)*2; // times 2 to be safe
+
+	// 32768 (max number of workgroups), 64 (shader workgroup size), 2 (index+data)
+	// force into power of 2
+	// stored as actual size -1 since all fetches subtract 1 anyway
+	//updateStructure.uaIndicesCount = (1u << (32u-__builtin_clzl(32768u*64*2-1)))-1u;
+	updateStructure.uaIndicesCount = 32768u*64*2*2; // times 2 to be safe
+
+	updateStructure.ucIndices =
+		malloc((updateStructure.ucIndicesCount+1)*sizeof(uint32_t));
+	updateStructure.uaIndices =
+		malloc((updateStructure.uaIndicesCount+1)*sizeof(uint32_t));
+	// does not do anything currently
+	uc_reset();
+	ua_reset();
+}
 
 // from ken perlin
-inline float perlin_fade_function(float t)
+float perlin_fade_function(float t)
 {
 	return t * t * t * (t * (t * 6 - 15) + 10);
 }
 
 // from wikipedia
-float lerp(float v0, float v1, float t) {
+float lerp(float v0, float v1, float t)
+{
 	return v0 + t * (v1 - v0);
 }
 
+float generate_random_from_2d(uint32_t x, uint32_t y)
+{
+	uint32_t width = 128;
+	uint32_t xPos = width*x;
+	uint32_t yPos = width*y;
+	uint32_t tmpSeed = ((xPos&0xFFFF) + (yPos<<16)) ^ seed;
+	srand(tmpSeed);
+	return (rand()%10000) / 10000.0f * 2.0f-1.0f;
+}
+
+// you should maybe not make a 2048x2048 texture when you load the site...
 void generate_heightmap(uint32_t dim)
 {
 	heightMapDimension = dim;
 	heightMap = malloc(heightMapDimension*heightMapDimension*sizeof(uint16_t));
 	
-	uint32_t valueNoiseLen = 16;
-	float *valueNoise = malloc((valueNoiseLen+1)*(valueNoiseLen+1)*4);
-
-	// generate value noise
-	for (uint32_t y = 0, i = 0; y < (valueNoiseLen+1); y++) {
-	for (uint32_t x = 0; x < (valueNoiseLen+1); x++,i++) {
-		valueNoise[i] = emscripten_random()*2.0f-1.0f;
-	}}
-
-	uint32_t width = heightMapDimension / valueNoiseLen;
+	uint32_t width = 128;
 	for (uint32_t y = 0, i = 0; y < heightMapDimension; y++) {
 	for (uint32_t x = 0; x < heightMapDimension; x++,i++) {
-		uint32_t gridX = x / width;
-		uint32_t gridY = y / width;
+		uint32_t gridX = (x+xWorld) / width;
+		uint32_t gridY = (y+yWorld) / width;
 		
-		float cellX = ((x % width)+0.5) / width;
-		float cellY = ((y % width)+0.5) / width;
+		float cellX = (((x+xWorld) % width)+0.5) / width;
+		float cellY = (((y+yWorld) % width)+0.5) / width;
 
-		float n0 = valueNoise[((gridY)*valueNoiseLen)+(gridX)];
-		float n1 = valueNoise[((gridY)*valueNoiseLen)+(gridX+1)];
-		float n2 = valueNoise[((gridY+1)*valueNoiseLen)+(gridX)];
-		float n3 = valueNoise[((gridY+1)*valueNoiseLen)+(gridX+1)];
+		float n0 = generate_random_from_2d(gridY, gridX);
+		float n1 = generate_random_from_2d(gridY, gridX+1);
+		float n2 = generate_random_from_2d(gridY+1, gridX);
+		float n3 = generate_random_from_2d(gridY+1, gridX+1);
 		float finalNoise = lerp(
 				lerp(n0, n1, perlin_fade_function(cellX)),
 				lerp(n2, n3, perlin_fade_function(cellX)),
 				perlin_fade_function(cellY));
-		heightMap[i] = finalNoise*20+100;
+		heightMap[i] = finalNoise*40+1000;
+	}}
+	
+	// to accelerate chunk generation
+	accelerationHeightMap = malloc(256*256*256*sizeof(uint16_t));
+	for (uint32_t accelerationZ = 0, i = 0; accelerationZ < 256; accelerationZ++) {
+	for (uint32_t accelerationX = 0; accelerationX < 256; accelerationX++,i++) {
+		uint32_t minDepth = 0xFFFFFFFF;
+		uint32_t maxDepth = 0;
+		for (uint32_t z = 0; z < 10; z++) {
+		for (uint32_t x = 0; x < 10; x++) {
+			uint32_t realX = (accelerationX<<3)+x-1;
+			uint32_t realZ = (accelerationZ<<3)+z-1;
+			if (realX > 2047u || realZ > 2047u) {
+				continue;
+			}
+			if (((realZ*heightMapDimension)|realX) >= 2048*2048) {
+				printf("???\n");
+				continue;
+			}
+			uint32_t depth = heightMap[(realZ*heightMapDimension)|realX];
+			minDepth = MIN(minDepth, depth);
+			maxDepth = MAX(maxDepth, depth);
+		}}
+		uint8_t minAccelerationY = minDepth>>3u;
+		uint8_t maxAccelerationY = (maxDepth+7u)>>3u;
+		accelerationHeightMap[i] = (maxAccelerationY<<8u) | minAccelerationY;
 	}}
 }
 
-__attribute__((used)) int init()
+// NOTE: make sure the chunk is not a border first!!!
+// tries to generate a chunk, if chunk empty-> does not generate one
+// does not ua_push_index!
+void chunk_create_from_2dnoise(uint32_t inax, uint32_t inay, uint32_t inaz)
 {
+	uint32_t accelerationX = inax;
+	uint32_t accelerationY = inay;
+	uint32_t accelerationZ = inaz;
+
+	uint32_t chunkIndex = chunkCount << 9;
+	uint32_t accelerationIndex = (accelerationZ << 16)
+		| (accelerationY << 8) | accelerationX;
+	
+	accelerationBufferData[accelerationIndex] = chunkIndex;
+	uint32_t voxelCountInChunk = 0;
+
+	uint16_t accelerationValue = accelerationHeightMap[(accelerationZ<<8)+accelerationX];
+	uint8_t minValue = accelerationValue & 0xFF;
+	uint8_t maxValue = accelerationValue >> 8;
+
+	if (inay >= minValue && inay <= maxValue) {
+		for (uint32_t chunkZ = 0; chunkZ < 8; chunkZ++) {
+		for (uint32_t chunkY = 0; chunkY < 8; chunkY++) {
+		for (uint32_t chunkX = 0; chunkX < 8; chunkX++) {
+			uint32_t realX = (accelerationX<<3)+chunkX;
+			uint32_t realY = (accelerationY<<3)+chunkY;
+			uint32_t realZ = (accelerationZ<<3)+chunkZ;
+			
+			uint32_t voxel = (uint32_t)(emscripten_random()*32) & 31u;
+			voxel += 1;
+			uint32_t depth = heightMap[(realZ*heightMapDimension)|realX];
+			if (realY > depth) {
+				voxel = 0;
+			}
+			if (voxel != 0) {
+				voxelCountInChunk++;
+			} else {
+				voxel = 1 << 31;
+			}
+			
+			uint32_t chunkOffset = (chunkZ << 6) | (chunkY << 3) | chunkX;
+			uint32_t index = chunkIndex | chunkOffset;
+			chunkBufferData[index] = voxel;
+		}}}
+	}
+	if (voxelCountInChunk == 0) {
+		accelerationBufferData[accelerationIndex] = 1 << 31;
+	} else {
+		chunkCount++;
+		// do not push index that has not gotten df optimized yet
+		//uc_push_index(accelerationIndex);
+	}
+}
+
+void acceleration_area_create_from_2dnoise_version_2(uint32_t inax, uint32_t inaz)
+{
+	// get lowest and highest point. can be optimized by SAT yet again
+	uint32_t minDepth = 0xFFFFFFFF;
+	uint32_t maxDepth = 0;
+	// check 1 outside to be sure
+	for (uint32_t z = 0; z < 10; z++) {
+	for (uint32_t x = 0; x < 10; x++) {
+		// inaxyz can not be 0 or 255, no need to check for overflow or underflow
+		uint32_t realX = (inax<<3)+x-1;
+		uint32_t realZ = (inaz<<3)+z-1;
+		uint32_t depth = heightMap[(realZ*heightMapDimension)|realX];
+		minDepth = MIN(minDepth, depth);
+		maxDepth = MAX(maxDepth, depth);
+	}}
+	maxDepth += 1;
+	for (uint32_t inay = border.yNeg; inay <= border.yPos; inay++) {
+		uint32_t accelerationIndex = (inaz << 16)
+			| (inay << 8) | inax;
+		uint32_t oldValue = accelerationBufferData[accelerationIndex];
+		if (inax >= border.xPos || inay >= border.yPos
+				|| inaz >= border.zPos || inax <= border.xNeg
+				|| inay <= border.yNeg || inaz <= border.zNeg) {
+			accelerationBufferData[accelerationIndex] = 3 << 30;
+		} else if (((inay<<3)+7) >= minDepth && (inay<<3) <= maxDepth) {
+			chunk_create_from_2dnoise(inax, inay, inaz);
+		} else {
+			accelerationBufferData[accelerationIndex] = 1 << 31;
+		}
+		if (accelerationBufferData[accelerationIndex] != oldValue) {
+			ua_push_index(accelerationIndex);
+		}
+	}
+}
+void border_area_create_from_2dnoise(
+		uint32_t inax, uint32_t inaz,
+		struct Border newBorder,
+		struct Border oldBorder)
+{
+	// get lowest and highest point. can be optimized by SAT yet again
+	uint32_t minDepth = 0xFFFFFFFF;
+	uint32_t maxDepth = 0;
+	// NOTE: if accelerationIndex.x|y|z == 0 or 255 a crash can happen here
+	for (uint32_t z = 0; z < 10; z++) {
+	for (uint32_t x = 0; x < 10; x++) {
+		uint32_t realX = (inax<<3)+x-1;
+		uint32_t realZ = (inaz<<3)+z-1;
+		uint32_t depth = heightMap[(realZ*heightMapDimension)|realX];
+		minDepth = MIN(minDepth, depth);
+		maxDepth = MAX(maxDepth, depth);
+	}}
+	maxDepth += 1;
+	for (uint32_t inay = border.yNeg; inay <= border.yPos; inay++) {
+		uint32_t accelerationIndex = (inaz << 16)
+			| (inay << 8) | inax;
+		uint32_t oldValue = accelerationBufferData[accelerationIndex];
+		if (!(
+				   inax >= oldBorder.xPos || inay >= oldBorder.yPos
+				|| inaz >= oldBorder.zPos || inax <= oldBorder.xNeg
+				|| inay <= oldBorder.yNeg || inaz <= oldBorder.zNeg)) {
+			inay = oldBorder.yPos-1;
+			continue;
+		} else if (inax >= newBorder.xPos || inay >= newBorder.yPos
+				|| inaz >= newBorder.zPos || inax <= newBorder.xNeg
+				|| inay <= newBorder.yNeg || inaz <= newBorder.zNeg) {
+			accelerationBufferData[accelerationIndex] = 3 << 30;
+		} else if (((inay<<3)+7) >= minDepth && (inay<<3) <= maxDepth) {
+			chunk_create_from_2dnoise(inax, inay, inaz);
+		} else {
+			accelerationBufferData[accelerationIndex] = 1 << 31;
+		}
+		if (accelerationBufferData[accelerationIndex] != oldValue) {
+			// do not push since it has not gotten df optimized yet
+			if ((accelerationBufferData[accelerationIndex] & (3u << 30)) == (3u << 30)) {
+				ua_push_index(accelerationIndex);
+			}
+		}
+	}
+}
+
+void border_area_optimize_acceleration(
+		uint32_t inax, uint32_t inaz,
+		struct Border newBorder,
+		struct Border oldBorder)
+{
+	uint32_t yStart = border.yNeg & ~31;
+	uint32_t yEnd = MIN((border.yPos+31) & ~31, 255 & ~31);
+	for (uint32_t inay = yStart; inay <= yEnd; inay+=32) {
+		struct Border currentBorder = {
+			.xNeg = inax,
+			.yNeg = inay,
+			.zNeg = inaz,
+			.xPos = inax+32,
+			.yPos = inay+32,
+			.zPos = inaz+32,
+		};
+		if (border_completely_inside_border(currentBorder, oldBorder)) {
+			continue;
+		}
+		
+		acceleration_area_calculate_df(inax, inay, inaz);
+	}
+}
+
+void border_area_optimize_chunk(
+		uint32_t inax, uint32_t inaz,
+		struct Border newBorder,
+		struct Border oldBorder)
+{
+	uint32_t yStart = border.yNeg & ~4;
+	uint32_t yEnd = (border.yPos+4) & ~4;
+	for (uint32_t inay = yStart; inay <= yEnd; inay+=4) {
+
+		struct Border currentBorder = {
+			.xNeg = inax,
+			.yNeg = inay,
+			.zNeg = inaz,
+			.xPos = inax+4,
+			.yPos = inay+4,
+			.zPos = inaz+4,
+		};
+		if (border_completely_inside_border(currentBorder, oldBorder)) {
+			continue;
+		}
+		
+		chunk_area_calculate_df(inax, inay, inaz);
+	}
+}
+
+uint32_t first = 1;
+void load_new_chunks()
+{
+	struct Border oldBorder = border;
+	struct Border newBorder;
+
+	/*
+	uint32_t borderAddCount = 4;
+	newBorder.xNeg = MAX((int)oldBorder.xNeg-borderAddCount, 0);
+	newBorder.yNeg = MAX((int)oldBorder.yNeg-borderAddCount, 0);
+	newBorder.zNeg = MAX((int)oldBorder.zNeg-borderAddCount, 0);
+	newBorder.xPos = MIN((int)oldBorder.xPos+borderAddCount, 255);
+	newBorder.yPos = MIN((int)oldBorder.yPos+borderAddCount, 255);
+	newBorder.zPos = MIN((int)oldBorder.zPos+borderAddCount, 255);
+
+	// TODO: remove this check
+	uint16_t currentLoadDistance = MAX(
+			MAX(
+				oldBorder.xPos-oldBorder.xNeg,
+				oldBorder.yPos-oldBorder.yNeg
+			), oldBorder.zPos-oldBorder.zNeg);
+			*/
+
+	/*
+	if (currentLoadDistance >= targetLoadDistance-1) {
+		return;
+	}
+	*/
+	int centerX = (int)sharedWithJS.cameraPosX >> 3;
+	int centerY = (int)sharedWithJS.cameraPosY >> 3;
+	int centerZ = (int)sharedWithJS.cameraPosZ >> 3;
+	
+	newBorder.xNeg = MAX(centerX-targetLoadDistance, 0);
+	newBorder.yNeg = MAX(centerY-targetLoadDistance, 0);
+	newBorder.zNeg = MAX(centerZ-targetLoadDistance, 0);
+	newBorder.xPos = MIN(centerX+targetLoadDistance, 255);
+	newBorder.yPos = MIN(centerY+targetLoadDistance, 255);
+	newBorder.zPos = MIN(centerZ+targetLoadDistance, 255);
+
+	int minNeg = MIN(MIN(newBorder.xNeg, newBorder.yNeg), newBorder.zNeg);
+	int maxPos = MAX(MAX(newBorder.xPos, newBorder.yPos), newBorder.zPos);
+	if (minNeg < 32 || maxPos > (256-32) || chunkCount > 80000) {
+		transform();
+		while ((volatile uint32_t)updateStructure.transformState == 2) {
+			emscripten_thread_sleep(1);
+		}
+		return;
+	}
+	
+	oldBorder.xNeg = MAX(oldBorder.xNeg, newBorder.xNeg);
+	oldBorder.yNeg = MAX(oldBorder.yNeg, newBorder.yNeg);
+	oldBorder.zNeg = MAX(oldBorder.zNeg, newBorder.zNeg);
+	oldBorder.xPos = MIN(oldBorder.xPos, newBorder.xPos);
+	oldBorder.yPos = MIN(oldBorder.yPos, newBorder.yPos);
+	oldBorder.zPos = MIN(oldBorder.zPos, newBorder.zPos);
+	
+	border = newBorder;
+
+	for (uint32_t accelerationZ = border.zNeg; accelerationZ <= border.zPos; accelerationZ++) {
+	for (uint32_t accelerationX = border.xNeg; accelerationX <= border.xPos; accelerationX++) {
+		border_area_create_from_2dnoise(
+				accelerationX, accelerationZ,
+				newBorder, oldBorder);
+	}}
+
+	uint32_t aZStart = border.zNeg & ~31;
+	uint32_t aZEnd = MIN((border.zPos+31) & ~31, 255 & ~31);
+	uint32_t aXStart = border.xNeg & ~31;
+	uint32_t aXEnd = MIN((border.xPos+31) & ~31, 255 & ~31);
+	for (uint32_t accelerationZ = aZStart; accelerationZ <= aZEnd; accelerationZ+=32) {
+	for (uint32_t accelerationX = aXStart; accelerationX <= aXEnd; accelerationX+=32) {
+		border_area_optimize_acceleration(accelerationX, accelerationZ,
+				newBorder, oldBorder);
+	}}
+
+	uint32_t cZStart = border.zNeg & ~3;
+	uint32_t cZEnd = (border.zPos+3) & ~3;
+	uint32_t cXStart = border.xNeg & ~3;
+	uint32_t cXEnd = (border.xPos+3) & ~3;
+	for (uint32_t accelerationZ = cZStart; accelerationZ <= cZEnd; accelerationZ+=4) {
+	for (uint32_t accelerationX = cXStart; accelerationX <= cXEnd; accelerationX+=4) {
+		border_area_optimize_chunk(accelerationX, accelerationZ,
+				newBorder, oldBorder);
+	}}
+}
+
+void job_thread()
+{
+	while (true) {
+		load_new_chunks();
+	}
+}
+__attribute__((used)) struct UpdateStructure *jobs_setup()
+{
+	pthread_t thread;
+	pthread_create(&thread, NULL, (void*)job_thread, NULL);
+	pthread_detach(thread);
+	
+	return &updateStructure;
+}
+
+__attribute__((used)) struct SharedWithJS *init()
+{
+	xWorld = 65536;
+	yWorld = 65536;
+	zWorld = 65536;
+	seed = 50;
+	
 	generate_heightmap(2048);
 
-	return 0;
+	update_structure_initialize();
+
+	gameSettings.loadDistance = 32;
+
+	return &sharedWithJS;
 }
 
 uint16_t sat_get_element(
@@ -135,50 +787,6 @@ uint16_t sat_get_element(
 		uint32_t z)
 {
 	return sat[(z*dim*dim)+(y*dim)+x];
-}
-
-v128_t sat_simd_get_element(
-		v128_t *sat,
-		uint16_t dim,
-		uint16_t x,
-		uint16_t y,
-		uint16_t z)
-{
-	return sat[(z*dim*dim)+(y*dim)+x];
-}
-
-v128_t sat_simd_get_sum(v128_t *sat, uint16_t dim, v128_t box)
-{
-	uint16_t *uints = (uint16_t*)&box;
-	uint16_t x1 = uints[1];
-	uint16_t y1 = uints[2];
-	uint16_t z1 = uints[3];
-	uint16_t x2 = uints[4];
-	uint16_t y2 = uints[5];
-	uint16_t z2 = uints[6];
-	v128_t sum = sat_simd_get_element(sat, dim, x2, y2, z2);
-	if (z1 > 0) {
-		sum = wasm_i16x8_sub(sum, sat_simd_get_element(sat, dim, x2, y2, z1-1));
-	}
-	if (y1 > 0) {
-		sum = wasm_i16x8_sub(sum, sat_simd_get_element(sat, dim, x2, y1-1, z2));
-	}
-	if (x1 > 0) {
-		sum = wasm_i16x8_sub(sum, sat_simd_get_element(sat, dim, x1-1, y2, z2));
-	}
-	if (x1 > 0 && y1 > 0) {
-		sum = wasm_i16x8_add(sum, sat_simd_get_element(sat, dim, x1-1, y1-1, z2));
-	}
-	if (x1 > 0 && z1 > 0) {
-		sum = wasm_i16x8_add(sum, sat_simd_get_element(sat, dim, x1-1, y2, z1-1));
-	}
-	if (y1 > 0 && z1 > 0) {
-		sum = wasm_i16x8_add(sum, sat_simd_get_element(sat, dim, x2, y1-1, z1-1));
-	}
-	if (x1 > 0 && y1 > 0 && z1 > 0) {
-		sum = wasm_i16x8_sub(sum, sat_simd_get_element(sat, dim, x1-1, y1-1, z1-1));
-	}
-	return sum;
 }
 
 uint16_t sat_get_sum(uint16_t *sat, uint16_t dim,
@@ -210,72 +818,6 @@ uint16_t sat_get_sum(uint16_t *sat, uint16_t dim,
 	return sum;
 }
 
-
-// creates summed area table for accelerationBuffer optimization
-// trying out SIMD
-// returns SIMD v128_t in u16x8 format
-// u16[0] = normal summed area table value
-// u16[1] = xNeg sat (area shifted once towards x-)
-// u16[2] = yNeg sat (area shifted once towards y-)
-// u16[3] = zNeg sat
-// u16[4] = xPos sat
-// u16[5] = yPos sat
-// u16[6] = zPos sat
-v128_t *sat_simd_create_acceleration(uint32_t dim, uint32_t *input)
-{
-	v128_t *sat;
-	posix_memalign((void**)&sat, 16, dim*dim*dim*sizeof(v128_t));
-
-	// begin by calculating normal summed area table
-	// 2 has been added to dimension for no out of bounds
-	uint16_t *preSAT = malloc(dim*dim*dim*sizeof(uint16_t));
-	for (uint16_t z = 0, index = 0; z < dim; z++) {
-	for (uint16_t y = 0; y < dim; y++) {
-	for (uint16_t x = 0; x < dim; x++,index++) {
-		uint16_t sum = (input[(z << 16)|(y << 8)|(x)] & (3 << 30)) == 0;
-
-		if (x > 0 && y > 0 && z > 0) {
-			sum += sat_get_element(preSAT, dim, x-1, y-1, z-1);
-		}
-		if (z > 0) {
-			sum += sat_get_element(preSAT, dim, x, y, z-1);
-		}
-		if (y > 0) {
-			sum += sat_get_element(preSAT, dim, x, y-1, z);
-		}
-		if (x > 0) {
-			sum += sat_get_element(preSAT, dim, x-1, y, z);
-		}
-		if (x > 0 && y > 0) {
-			sum -= sat_get_element(preSAT, dim, x-1, y-1, z);
-		}
-		if (y > 0 && z > 0) {
-			sum -= sat_get_element(preSAT, dim, x, y-1, z-1);
-		}
-		if (x > 0 && z > 0) {
-			sum -= sat_get_element(preSAT, dim, x-1, y, z-1);
-		}
-
-		preSAT[index] = sum;
-	}}}
-	for (uint16_t z = 0, index = 0; z < dim; z++) {
-	for (uint16_t y = 0; y < dim; y++) {
-	for (uint16_t x = 0; x < dim; x++,index++) {
-		uint32_t sum = preSAT[index];
-		uint16_t negX = x == 0 ? 0 : sat_get_element(preSAT, dim, x-1, y, z);
-		uint16_t negY = y == 0 ? 0 : sat_get_element(preSAT, dim, x, y-1, z);
-		uint16_t negZ = z == 0 ? 0 : sat_get_element(preSAT, dim, x, y, z-1);
-		uint16_t posX = x == dim-1 ? sum : sat_get_element(preSAT, dim, x+1, y, z);
-		uint16_t posY = y == dim-1 ? sum : sat_get_element(preSAT, dim, x, y+1, z);
-		uint16_t posZ = z == dim-1 ? sum : sat_get_element(preSAT, dim, x, y, z+1);
-
-		sat[index] = wasm_u16x8_make(sum, negX, negY, negZ, posX, posY, posZ, 0);
-	}}}
-
-	free(preSAT);
-	return sat;
-}
-
 uint16_t sat_2d_get_sum(
 		uint16_t *sat, uint16_t dim,
 		uint16_t x0, uint16_t y0,
@@ -297,22 +839,6 @@ uint16_t sat_2d_get_sum(
 // optimizes a set of 4x4x4 chunks (32*32*32) voxels
 void chunk_area_calculate_df(uint16_t inax, uint16_t inay, uint16_t inaz)
 {
-	// TODO: expand sat in 16? voxels in each side
-	/*
-	 * simdSAT makes sure only 8 loads are necessary in the main loop
-	 * TODO: implement this?
-	 * [0] = sat[x, y, z]
-	 * [1] = sat[x, y, z-1]
-	 * [2] = sat[x, y-1, z]
-	 * [3] = sat[x, y-1, z-1]
-	 * [4] = sat[x-1, y, z]
-	 * [5] = sat[x-1, y, z-1]
-	 * [6] = sat[x-1, y-1, z]
-	 * [7] = sat[x-1, y-1, z-1]
-	 */
-	//v128_t *simdSAT;
-	//posix_memalign((void**)&simdSAT, 16, 32*32*32*sizeof(v128_t));
-	
 	uint16_t *sat = malloc(40*40*40*sizeof(uint16_t));
 	uint16_t maxDFIterationCount = 16;
 
@@ -331,9 +857,12 @@ void chunk_area_calculate_df(uint16_t inax, uint16_t inay, uint16_t inaz)
 		int accelerationZ = realZ>>3;
 
 		uint16_t sum;
-		if (accelerationX < 0 || accelerationY < 0 || accelerationZ < 0
-				|| accelerationX > 255 || accelerationY > 255
-				|| accelerationZ > 255) {
+		if (accelerationX <= (int)border.xNeg
+				|| accelerationY <= (int)border.yNeg
+				|| accelerationZ <= (int)border.zNeg
+				|| accelerationX >= (int)border.xPos
+				|| accelerationY >= (int)border.yPos
+				|| accelerationZ >= (int)border.zPos) {
 			sum = 1;
 		} else {
 			uint32_t accelerationIndex =
@@ -510,8 +1039,13 @@ void chunk_area_calculate_df(uint16_t inax, uint16_t inay, uint16_t inaz)
 			voxel = (1 << 31)
 				| (satX-x0) | ((satY-y0) << 5) | ((satZ-z0) << 10)
 				| ((x1-satX) << 15) | ((y1-satY) << 20) | ((z1-satZ) << 25);
-			chunkBufferData[voxelIndex] = voxel;
+			emscripten_atomic_store_u32(&chunkBufferData[voxelIndex], voxel);
 		}}}
+
+		uc_push_index(accelerationIndex);
+
+		// since df has been generated -> give it to the GPU
+		ua_push_index(accelerationIndex);
 	}}}
 
 	free(sat);
@@ -534,9 +1068,12 @@ void acceleration_area_calculate_df(uint16_t inax, uint16_t inay, uint16_t inaz)
 			| (accelerationY<<8) | accelerationX;
 		
 		uint16_t sum;
-		if (accelerationX < 0 || accelerationY < 0 || accelerationZ < 0
-				|| accelerationX > 255 || accelerationY > 255
-				|| accelerationZ > 255) {
+		if (accelerationX <= (int)border.xNeg
+				|| accelerationY <= (int)border.yNeg
+				|| accelerationZ <= (int)border.zNeg
+				|| accelerationX >= (int)border.xPos
+				|| accelerationY >= (int)border.yPos
+				|| accelerationZ >= (int)border.zPos) {
 			sum = 1;
 		} else {
 			uint32_t voxel = accelerationBufferData[accelerationIndex];
@@ -592,6 +1129,7 @@ void acceleration_area_calculate_df(uint16_t inax, uint16_t inay, uint16_t inaz)
 		if ((voxel & (3u << 30)) != (2u << 30)) {
 			continue;
 		}
+		uint32_t oldValue = voxel;
 
 		int satX = x+4;
 		int satY = y+4;
@@ -695,193 +1233,15 @@ void acceleration_area_calculate_df(uint16_t inax, uint16_t inay, uint16_t inaz)
 			| (satX-x0) | ((satY-y0) << 5) | ((satZ-z0) << 10)
 			| ((x1-satX) << 15) | ((y1-satY) << 20) | ((z1-satZ) << 25);
 		accelerationBufferData[accelerationIndex] = voxel;
+
+		if (voxel != oldValue) {
+			ua_push_index(accelerationIndex);
+		}
 	}}}
+	free(sat);
 }
 
-// optimizes area in accelerationBuffer (32*32*32)
-// input is location in accelerationBuffer of (x-, y-, z-) part of area
-void acceleration_optimize_area(uint16_t xina, uint16_t yina, uint16_t zina)
-{
-	uint32_t satDimension = 32;
-	v128_t *sat = sat_simd_create_acceleration(satDimension, accelerationBufferData);
-
-	uint16_t maxDFIterationCount = 31;
-
-	// sets the furthest you can expand in each direction
-	// TODO: set this depending on in coords and border coords
-	
-	v128_t borderVector = wasm_i16x8_make(0,
-			(xina == (border.xNeg)) ? 1 : 0,
-			(yina == (border.yNeg)) ? 1 : 0,
-			(zina == (border.zNeg)) ? 1 : 0,
-			((xina+31) == (border.xPos)) ? 30 : 31,
-			((yina+31) == (border.yPos)) ? 30 : 31,
-			((zina+31) == (border.zPos)) ? 30 : 31,
-			0);
-
-	v128_t addVector = wasm_i16x8_make(0, -1, -1, -1, 1, 1, 1, 0);
-
-	v128_t zeroVector = wasm_i16x8_make(0, 0, 0, 0, 0, 0, 0, 0);
-
-	// this is inexact but that does not matter since this makes a good result
-	// with good performance
-	// An improvement would be to fallback to a more precise method if
-	// the offsets are small
-	// A future further optimization step can make sure the df is as good
-	// as possible.
-	// This can be optimized further by comparing to neighbours df
-	for (uint16_t accelerationZ = 0; accelerationZ < 32; accelerationZ++) {
-	for (uint16_t accelerationY = 0; accelerationY < 32; accelerationY++) {
-	for (uint16_t accelerationX = 0; accelerationX < 32; accelerationX++) {
-		uint32_t accelerationIndex =
-			(accelerationZ << 16) | (accelerationY << 8) | accelerationX;
-
-		// remove border and non air chunks
-		if ((accelerationBufferData[accelerationIndex] & (3u << 30)) != (2u << 30)) {
-			continue;
-		}
-
-		union PositionUnion {
-			v128_t vector;
-			uint16_t uints[8];
-		} current;
-		current.vector = wasm_u16x8_make(0,
-				accelerationX, accelerationY, accelerationZ,
-				accelerationX, accelerationY, accelerationZ,
-				0);
-		v128_t old;
-			
-		union {
-			v128_t vector;
-			uint16_t uints[8];
-		} sums;
-		sums.vector = zeroVector;
-
-		uint32_t i = 0;
-		for (; i < maxDFIterationCount; i++) {
-			old = current.vector;
-			v128_t mask1Vector = wasm_i16x8_ne(current.vector, borderVector);
-			v128_t mask2Vector = wasm_i16x8_eq(sums.vector, zeroVector);
-			v128_t finalMaskVector = wasm_v128_and(mask1Vector, mask2Vector);
-			if (!wasm_v128_any_true(finalMaskVector)) { // if can't add: stop
-				break;
-			}
-
-			v128_t postAddVector = wasm_v128_and(addVector, finalMaskVector);
-			current.vector = wasm_i16x8_add(current.vector, postAddVector);
-
-			sums.vector = sat_simd_get_sum(sat, satDimension, current.vector);
-			if (sums.uints[0] != 0) {
-				current.vector = old;
-				//break;
-				// TODO: change to a new approach here
-			}
-		}
-		uint32_t voxel = (1 << 31)
-			| ((accelerationX-current.uints[1]))
-			| ((accelerationY-current.uints[2]) << 5)
-			| ((accelerationZ-current.uints[3]) << 10)
-			| ((current.uints[4]-accelerationX) << 15)
-			| ((current.uints[5]-accelerationY) << 20)
-			| ((current.uints[6]-accelerationZ) << 25);
-		accelerationBufferData[accelerationIndex] = voxel;
-	}}}
-}
-
-void acceleration_area_create_from_2dnoise(
-		uint32_t inax, uint32_t inay, uint32_t inaz)
-{
-	// TODO: rename acceleration... to ina...
-	uint32_t accelerationX = inax;
-	uint32_t accelerationY = inay;
-	uint32_t accelerationZ = inaz;
-
-	uint32_t chunkIndex = chunkCount << 9;
-	uint32_t accelerationIndex = (accelerationZ << 16) | (accelerationY << 8) | accelerationX;
-	
-	if (accelerationX > (border.xPos-2) || accelerationY > (border.yPos-2)
-			|| accelerationZ > (border.zPos-2) || accelerationX == 0
-			|| accelerationY == 0 || accelerationZ == 0) {
-		accelerationBufferData[accelerationIndex] = 3 << 30;
-		return;
-	} else {
-		accelerationBufferData[accelerationIndex] = chunkIndex;
-	}
-	// TODO: calculate min and max heightmap value in chunk and only generated required chunks
-	uint32_t voxelCountInChunk = 0;
-	for (uint32_t chunkZ = 0; chunkZ < 8; chunkZ++) {
-	for (uint32_t chunkY = 0; chunkY < 8; chunkY++) {
-	for (uint32_t chunkX = 0; chunkX < 8; chunkX++) {
-		uint32_t realX = (accelerationX<<3)+chunkX;
-		uint32_t realY = (accelerationY<<3)+chunkY;
-		uint32_t realZ = (accelerationZ<<3)+chunkZ;
-		
-		uint32_t voxel = (uint32_t)(emscripten_random()*32) & 31u;
-		uint32_t depth = heightMap[(realZ*heightMapDimension)|realX];
-		if (realY > depth) {
-			voxel = 0;
-		}
-		if (voxel != 0) {
-			voxelCountInChunk++;
-		} else {
-			voxel = 1 << 31;
-		}
-		
-		uint32_t chunkOffset = (chunkZ << 6) | (chunkY << 3) | chunkX;
-		uint32_t index = chunkIndex | chunkOffset;
-		chunkBufferData[index] = voxel;
-	}}}
-	if (voxelCountInChunk == 0) {
-		accelerationBufferData[accelerationIndex] = 1 << 31;
-	} else {
-		chunkCount++;
-	}
-}
-
-// NOTE: make sure the chunk is not a border first!!!
-// tries to generate a chunk, if chunk empty-> does not generate one
-void chunk_create_from_2dnoise(uint32_t inax, uint32_t inay, uint32_t inaz)
-{
-	uint32_t accelerationX = inax;
-	uint32_t accelerationY = inay;
-	uint32_t accelerationZ = inaz;
-
-	uint32_t chunkIndex = chunkCount << 9;
-	uint32_t accelerationIndex = (accelerationZ << 16)
-		| (accelerationY << 8) | accelerationX;
-	
-	accelerationBufferData[accelerationIndex] = chunkIndex;
-	uint32_t voxelCountInChunk = 0;
-	for (uint32_t chunkZ = 0; chunkZ < 8; chunkZ++) {
-	for (uint32_t chunkY = 0; chunkY < 8; chunkY++) {
-	for (uint32_t chunkX = 0; chunkX < 8; chunkX++) {
-		uint32_t realX = (accelerationX<<3)+chunkX;
-		uint32_t realY = (accelerationY<<3)+chunkY;
-		uint32_t realZ = (accelerationZ<<3)+chunkZ;
-		
-		uint32_t voxel = (uint32_t)(emscripten_random()*32) & 31u;
-		voxel += 1;
-		uint32_t depth = heightMap[(realZ*heightMapDimension)|realX];
-		if (realY > depth) {
-			voxel = 0;
-		}
-		if (voxel != 0) {
-			voxelCountInChunk++;
-		} else {
-			voxel = 1 << 31;
-		}
-		
-		uint32_t chunkOffset = (chunkZ << 6) | (chunkY << 3) | chunkX;
-		uint32_t index = chunkIndex | chunkOffset;
-		chunkBufferData[index] = voxel;
-	}}}
-	if (voxelCountInChunk == 0) {
-		accelerationBufferData[accelerationIndex] = 1 << 31;
-	} else {
-		chunkCount++;
-	}
-}
-
+// NOT YET UPDATED. DO NOT USE
 void chunk_create_empty(uint32_t inax, uint32_t inay, uint32_t inaz)
 {
 	uint32_t accelerationX = inax;
@@ -906,64 +1266,38 @@ void chunk_create_empty(uint32_t inax, uint32_t inay, uint32_t inaz)
 	chunkCount++;
 }
 
-// TODO: check for out of memory instead of crashing...
-void acceleration_area_create_from_2dnoise_version_2(uint32_t inax, uint32_t inaz)
+__attribute__((used)) void *create_chunks(
+		uint32_t inAccelerationBufferSize, uint32_t inChunkBufferSize)
 {
-	// TODO: move this border creation step elsewhere
-	if (inax > (border.xPos-2) || inaz > (border.zPos-2)
-			|| inax == 0 || inaz == 0) {
-		for (uint32_t inay = 0; inay < 31; inay++) {
-			chunk_create_from_2dnoise(inax, inay, inaz);
-		}
-	}
-	// get lowest and highest point. can be optimized by SAT yet again
-	uint32_t minDepth = 0xFFFFFFFF;
-	uint32_t maxDepth = 0;
-	for (uint32_t z = 0; z < 8; z++) {
-	for (uint32_t x = 0; x < 8; x++) {
-		uint32_t realX = (inax<<3)+x;
-		uint32_t realZ = (inaz<<3)+z;
-		uint32_t depth = heightMap[(realZ*heightMapDimension)|realX];
-		minDepth = MIN(minDepth, depth);
-		maxDepth = MAX(maxDepth, depth);
-	}}
-	// TODO: do something better
-	// this is a temporary solution to
-	// make sure all opaque voxels are surrounded
-	// by distance fields so rendering is correct
-	maxDepth += 1;
-	for (uint32_t inay = border.yNeg; inay <= border.yPos; inay++) {
-		uint32_t accelerationIndex = (inaz << 16)
-			| (inay << 8) | inax;
-		if (inax > (border.xPos-2) || inay > (border.yPos-2)
-				|| inaz > (border.zPos-2) || inax == border.xNeg
-				|| inay == border.yNeg || inaz == border.zNeg) {
-			accelerationBufferData[accelerationIndex] = 3 << 30;
-		} else if (((inay<<3)+7) >= minDepth && (inay<<3) <= maxDepth) {
-			chunk_create_from_2dnoise(inax, inay, inaz);
-		} else {
-			accelerationBufferData[accelerationIndex] = 1 << 31;
-		}
-	}
-}
+	accelerationBufferSize = inAccelerationBufferSize;
+	chunkBufferSize = inChunkBufferSize;
 
-__attribute__((used)) void *create_chunks(uint32_t accelerationBufferSize, uint32_t chunkBufferSize)
-{
-	accelerationBufferData = malloc(accelerationBufferSize);
-	chunkBufferData = malloc(chunkBufferSize);
+	chunkCount = 0;
+	posix_memalign((void**)&accelerationBufferData, 16, accelerationBufferSize);
+	posix_memalign((void**)&chunkBufferData, 16, chunkBufferSize);
 
+	uint32_t *returnedData = malloc(64);
+	returnedData[0] = (uint32_t)accelerationBufferData;
+	returnedData[1] = (uint32_t)chunkBufferData;
+	
+	for (uint32_t i = 0; i < accelerationBufferSize/4; i++) {
+		accelerationBufferData[i] = 3u << 30;
+	}
+	
 	maxChunkCount = chunkBufferSize / (512*sizeof(uint32_t));
 
-	uint32_t xMax = 128;
-	uint32_t yMax = 64;
-	uint32_t zMax = 128;
+	int initialLoadDistance = 5;
+
+	int centerX = 128;
+	int centerY = 128;
+	int centerZ = 128;
 	
-	border.xNeg = 0;
-	border.yNeg = 0;
-	border.zNeg = 0;
-	border.xPos = xMax-1;
-	border.yPos = yMax-1;
-	border.zPos = zMax-1;
+	border.xNeg = MAX(centerX-initialLoadDistance, 0);
+	border.yNeg = MAX(centerY-initialLoadDistance, 0);
+	border.zNeg = MAX(centerZ-initialLoadDistance, 0);
+	border.xPos = MIN(centerX+initialLoadDistance, 255);
+	border.yPos = MIN(centerY+initialLoadDistance, 255);
+	border.zPos = MIN(centerZ+initialLoadDistance, 255);
 
 	for (uint32_t accelerationZ = border.zNeg; accelerationZ <= border.zPos; accelerationZ++) {
 	for (uint32_t accelerationX = border.xNeg; accelerationX <= border.xPos; accelerationX++) {
@@ -978,16 +1312,206 @@ __attribute__((used)) void *create_chunks(uint32_t accelerationBufferSize, uint3
 		acceleration_area_calculate_df(
 				accelerationX, accelerationY, accelerationZ);
 	}}}
-	for (uint32_t z = 0; z < zMax; z+=4) {
-	for (uint32_t y = 0; y < yMax; y+=4) {
-	for (uint32_t x = 0; x < xMax; x+=4) {
+	for (uint32_t z = border.zNeg; z <= border.zPos; z+=4) {
+	for (uint32_t y = border.yNeg; y <= border.yPos; y+=4) {
+	for (uint32_t x = border.xNeg; x <= border.xPos; x+=4) {
 		chunk_area_calculate_df(x, y, z);
 	}}}
 
-	printf("%d / %d\n", chunkCount, maxChunkCount);
+	printf("chunkBufferCount: %d / %d\n", chunkCount, maxChunkCount);
 
-	uint32_t *returnedData = malloc(64);
-	returnedData[0] = (uint32_t)accelerationBufferData;
-	returnedData[1] = (uint32_t)chunkBufferData;
+	// returned accelerationBufferData and chunkBufferData fills instead
+	uc_reset();
+	ua_reset();
 	return returnedData;
+}
+
+bool border_completely_inside_border(struct Border inside, struct Border outside)
+{
+	return (inside.xNeg > outside.xNeg && inside.xPos < outside.xPos
+			&& inside.yNeg > outside.yNeg && inside.yPos < outside.yPos
+			&& inside.zNeg > outside.zNeg && inside.zPos < outside.zPos);
+}
+
+void create_octree(
+		struct Octree *octree,
+		uint32_t allocationCount,
+		uint32_t dataAllocationCount)
+{
+	octree->allocationCount = allocationCount;
+	octree->indices = calloc(allocationCount, sizeof(uint32_t));
+	if (dataAllocationCount != 0) {
+		octree->data = calloc(dataAllocationCount, 1);
+	}
+	
+	// already initialized to 0
+	octree->count = 8;
+}
+
+struct ReturnedNode get_octree_node(
+		struct Octree *octree,
+		uint16_t targetX, uint16_t targetY, uint16_t targetZ,
+		uint16_t targetLevel)
+{
+	uint16_t x = 0;
+	uint16_t y = 0;
+	uint16_t z = 0;
+	uint16_t currentSet = 0;
+	uint16_t voxelSize = 1 << 10;
+	uint16_t currentNode = 0;
+	uint16_t targetVoxelSize = 1 << targetLevel;
+	for (;;) {
+		uint16_t midX = x + voxelSize;
+		uint16_t midY = y + voxelSize;
+		uint16_t midZ = z + voxelSize;
+		
+		uint16_t cube = (targetX >= midX)
+			+ ((targetY >= midY) << 1)
+			+ ((targetZ >= midZ) << 2);
+		currentNode = currentSet + cube;
+
+		x += voxelSize & -(targetX >= midX);
+		y += voxelSize & -(targetY >= midY);
+		z += voxelSize & -(targetZ >= midZ);
+
+		if (voxelSize == targetVoxelSize) {
+			break;
+		}
+		
+		currentSet = octree->indices[currentNode];
+		if (currentSet == 0) {
+			break;
+		}
+
+		voxelSize >>= 1;
+	}
+	return (struct ReturnedNode) {
+		.index = currentNode,
+		.voxelSize = voxelSize,
+		.x = x,
+		.y = y,
+		.z = z,
+	};
+}
+struct ReturnedNode force_octree_node(
+		struct Octree *octree,
+		uint16_t targetX, uint16_t targetY, uint16_t targetZ,
+		uint16_t targetLevel)
+{
+	uint16_t x = 0;
+	uint16_t y = 0;
+	uint16_t z = 0;
+	uint16_t currentSet = 0;
+	uint16_t voxelSize = 1 << 10;
+	uint16_t currentNode = 0;
+	uint16_t targetVoxelSize = 1 << targetLevel;
+	for (;;) {
+		uint16_t midX = x + voxelSize;
+		uint16_t midY = y + voxelSize;
+		uint16_t midZ = z + voxelSize;
+		
+		uint16_t cube = (targetX >= midX)
+			+ ((targetY >= midY) << 1)
+			+ ((targetZ >= midZ) << 2);
+		currentNode = currentSet + cube;
+
+		x += voxelSize & -(targetX >= midX);
+		y += voxelSize & -(targetY >= midY);
+		z += voxelSize & -(targetZ >= midZ);
+
+		if (voxelSize == targetVoxelSize) {
+			break;
+		}
+		
+		currentSet = octree->indices[currentNode];
+		if (currentSet == 0) {
+			// allocate new nodes
+			currentSet = octree->count;
+			octree->indices[currentNode] = currentSet;
+			// NOTE: octree.indices[octree.count] -> octree.count+7
+			//       MUST be zero!
+			octree->count += 8;
+		}
+
+		voxelSize >>= 1;
+	}
+	return (struct ReturnedNode) {
+		.index = currentNode,
+		.voxelSize = voxelSize,
+		.x = x,
+		.y = y,
+		.z = z,
+	};
+}
+
+void transform()
+{
+	//emscripten_thread_sleep(16000);
+
+	updateStructure.transformState = 1;
+	
+	uint32_t lenX = border.xPos-border.xNeg;
+	uint32_t lenY = border.yPos-border.yNeg;
+	uint32_t lenZ = border.zPos-border.zNeg;
+	uint32_t midX = border.xNeg+(lenX/2);
+	uint32_t midY = border.yNeg+(lenY/2);
+	uint32_t midZ = border.zNeg+(lenZ/2);
+	uint32_t transformX = 128-midX;
+	uint32_t transformY = 128-midY;
+	uint32_t transformZ = 128-midZ;
+
+	struct Border oldBorder = border;
+	struct Border newBorder; 
+	newBorder.xNeg = MAX(border.xNeg+transformX, 0);
+	newBorder.yNeg = MAX(border.yNeg+transformY, 0);
+	newBorder.zNeg = MAX(border.zNeg+transformZ, 0);
+	newBorder.xPos = MIN(border.xPos+transformX, 255);
+	newBorder.yPos = MIN(border.yPos+transformY, 255);
+	newBorder.zPos = MIN(border.zPos+transformZ, 255);
+
+	printf("oldBorder: %d, %d, %d, %d, %d, %d\n",
+			border.xNeg, border.yNeg, border.zNeg,
+			border.xPos, border.yPos, border.zPos);
+	printf("newBorder: %d, %d, %d, %d, %d, %d\n",
+			newBorder.xNeg, newBorder.yNeg, newBorder.zNeg,
+			newBorder.xPos, newBorder.yPos, newBorder.zPos);
+	printf("change: %d, %d, %d\n",
+			transformX, transformY, transformZ);
+
+	for (uint32_t z = newBorder.zNeg, i = 0; z < newBorder.zPos; z++) {
+	for (uint32_t y = newBorder.yNeg; y < newBorder.yPos; y++) {
+	for (uint32_t x = newBorder.xNeg; x < newBorder.xPos; x++,i++) {
+		uint32_t oldX = x-transformX;
+		uint32_t oldY = y-transformY;
+		uint32_t oldZ = z-transformZ;
+		uint32_t oldIndex = (oldZ<<16) | (oldY<<8) | oldX;
+		if (x == newBorder.xNeg || x == newBorder.xPos
+				|| y == newBorder.yNeg || y == newBorder.yPos
+				|| z == newBorder.zNeg || z == newBorder.zPos) {
+			accelerationBufferData[(z<<16)|(y<<8)|x] = 3u << 30;
+		} else {
+			accelerationBufferData[(z<<16)|(y<<8)|x] = accelerationBufferData[oldIndex];
+		}
+	}}}
+
+	border = newBorder;
+	
+	printf("old: %d\n", oldBorder.xNeg*8+xWorld);
+
+	// WHY DOES THIS NOT WORK????
+	xWorld -= transformX*8;
+	yWorld -= transformY*8;
+	zWorld -= transformZ*8;
+	
+	printf("new: %d\n", newBorder.xNeg*8+xWorld);
+
+	free(heightMap);
+	free(accelerationHeightMap);
+	generate_heightmap(heightMapDimension);
+	
+	
+	//chunkCount = 0;
+
+	asm volatile("" : : : "memory");
+	updateStructure.transformState = 2;
 }

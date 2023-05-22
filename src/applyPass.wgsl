@@ -19,7 +19,7 @@ struct DebugMsgInfo {
 }
 
 @group(0) @binding(0) var outputTexture: texture_storage_2d<rgba8unorm, write>;
-@group(0) @binding(1) var colorTexture: texture_2d<f32>;
+@group(0) @binding(1) var colorTexture: texture_2d<u32>;
 @group(0) @binding(2) var directLightingTexture: texture_2d<f32>;
 @group(0) @binding(3) var<uniform> constants: Constants;
 //@group(0) @binding(4) var skyBoxTexture: texture_2d_array<f32>;
@@ -86,7 +86,7 @@ fn main(@builtin(global_invocation_id) globalID: vec3<u32>)
 	let coord = (vec2<f32>(globalID.xy)+vec2<f32>(0.5f, 0.5f)) / 
 		vec2<f32>(f32(constants.width), f32(constants.height));
 	let inputColor = textureLoad(colorTexture, vec2(globalID.xy), 0);
-	if (inputColor.r == 0f) {
+	if (inputColor.r == 0u) {
 		let rayDir = generate_ray(coord);
 
 		let skyBoxTexel = textureSampleLevel(skyBoxTexture, skyBoxSampler, rayDir, 0f);
@@ -104,7 +104,7 @@ fn main(@builtin(global_invocation_id) globalID: vec3<u32>)
 		coord,
 		0f).r;
 
-	var color = vec4(0f, inputColor.r, 0f, 1f);
+	var color = vec4(0f, f32(inputColor.r)/ 31f * 0.5f + 0.5f, 0f, 1f);
 
 	color *= vec4(inputDirectLighting, inputDirectLighting, inputDirectLighting, 1f);
 	textureStore(outputTexture, vec2(globalID.xy), color);

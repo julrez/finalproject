@@ -1,10 +1,10 @@
 let canvas;
 var Module;
 
-// TODO: meta tag for github pages hosting!!!
+let inMenu = true;
 
+//let cameraPos = [1024, 1024, 1024];
 let cameraAxis = [0, 0, -1];
-let cameraPos = [500, 120.234890, 500];
 let mousePitch = 0, mouseYaw = 270;
 
 let shaderDebugEnabled = false;
@@ -14,9 +14,33 @@ if (shaderDebugEnabled) {
 
 let keysPressed = {};
 
-let skybox;
-function load_skybox_texture(input)
+let sharedWithJSAddress = undefined;
+let sharedWithJSMemory = undefined;
+
+let testingVar = 9010788;
+
+function get_camera_pos()
 {
+	return [
+		Module.HEAPF32[(sharedWithJSAddress>>2)+0],
+		Module.HEAPF32[(sharedWithJSAddress>>2)+1],
+		Module.HEAPF32[(sharedWithJSAddress>>2)+2]
+	];
+}
+
+function set_camera_pos(cameraPos)
+{
+	Module.HEAPF32[(sharedWithJSAddress>>2)+0] = cameraPos[0];
+	Module.HEAPF32[(sharedWithJSAddress>>2)+1] = cameraPos[1];
+	Module.HEAPF32[(sharedWithJSAddress>>2)+2] = cameraPos[2];
+}
+
+function playOnClick()
+{
+	inMenu = false;
+	console.log("hello?");
+	let container = document.getElementById("UIContainer");
+	container.style = "display: none";
 }
 
 window.addEventListener('load', main);
@@ -27,16 +51,17 @@ async function main()
 	canvas.width = window.innerWidth;
 	canvas.height = window.innerHeight;
 	
-	compute_test();
-	
 	Module = {
 		//wasmMemory:
 		onRuntimeInitialized: function () {
 			let init = Module.cwrap("init", "number", []);
-			init();
-			load_skybox_texture({
-				callback: compute_test
-			});
+			sharedWithJSAddress = init();
+			let sharedWithJSOffset = sharedWithJSAddress/4;
+			Module.HEAPF32[sharedWithJSOffset+0] = 1024;
+			Module.HEAPF32[sharedWithJSOffset+1] = 1024;
+			Module.HEAPF32[sharedWithJSOffset+2] = 1024;
+	
+			compute_test();
 		}
 	};
 	const mainWasmScript = document.createElement('script');
@@ -45,7 +70,9 @@ async function main()
 	document.head.appendChild(mainWasmScript);
 
 	addEventListener("click", (event) => {
-		lock_cursor(canvas);
+		if (!inMenu) {
+			lock_cursor(canvas);
+		}
 	});
 	addEventListener("mousemove", (event) => {
 		if (!(canvas === document.pointerLockElement)) {
@@ -162,11 +189,11 @@ async function compute_test()
 	
 	let pass2Texture = device.createTexture({
 		size: {
-			width: canvas.width,
-			height: canvas.height,
+			width: window.screen.width,
+			height: window.screen.height,
 		},
 		dimension: "2d",
-		format: "rgba8unorm", // TODO: uint
+		format: "rgba8uint",
 		//new: usage: GPUTextureUsage.STORAGE_BINDING | TEXTURE_BINDING,
 		usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
 		viewFormats: [],
@@ -175,8 +202,8 @@ async function compute_test()
 	
 	let pass1Texture = device.createTexture({
 		size: { /* make sure no out of bounds happens */
-			width: Math.ceil(canvas.width/3)*3,
-			height: Math.ceil(canvas.height/3)*3,
+			width: Math.ceil(screen.width/3)*3,
+			height: Math.ceil(screen.height/3)*3,
 		},
 		dimension: "2d",
 		format: "r32uint",
@@ -187,8 +214,8 @@ async function compute_test()
 	
 	let depthTexture = device.createTexture({
 		size: { /* make sure no out of bounds happens */
-			width: Math.ceil(canvas.width),
-			height: Math.ceil(canvas.height),
+			width: Math.ceil(screen.width),
+			height: Math.ceil(screen.height),
 		},
 		dimension: "2d",
 		format: "r32float", // depth32float does not support STORAGE_BINDING ):
@@ -233,13 +260,28 @@ async function compute_test()
 	let cbMemory = new Uint32Array(Module.HEAP32.buffer, returnedDataArray[1], chunkBufferSize/4);
 
 	// webgpu does not support SharedArrayBuffer :(
-	accelerationBufferMemory = abMemory.slice().buffer;
-	chunkBufferMemory = cbMemory.slice().buffer;
+	let copiedAbMemory = abMemory.slice().buffer;
+	let copiedCbMemory = cbMemory.slice().buffer;
+
+	// setup all threads and workers
+	var jobs_setup_function = Module.cwrap("jobs_setup", "number", []);
+	let updateStructureAddress = jobs_setup_function();
+	let updateStructureMemory = new Uint32Array(
+		Module.HEAP32.buffer, updateStructureAddress, 10*4
+	);
+	
+	{
+		var uaBufferData = new Uint32Array(32768*64*2*4 + 4*2);
+		var ucVoxelBufferData = new Uint32Array(32768*(8*8*4)*4);
+		var ucIndexBufferData = new Uint32Array(16384*4);
+		var ucChunkCount = 0;
+	}
+	// temporary code to test if everything is done correctly
 
 	queue.writeBuffer(
 		chunkBuffer,
 		0, // bufferOffset
-		chunkBufferMemory,
+		copiedCbMemory,
 		0, // dataOffset
 		chunkBufferSize // size
 	);
@@ -247,7 +289,7 @@ async function compute_test()
 	queue.writeBuffer(
 		accelerationBuffer,
 		0, // bufferOffset
-		accelerationBufferMemory,
+		copiedAbMemory,
 		0, // dataOffset
 		accelerationBufferSize // size
 	);
@@ -272,7 +314,7 @@ async function compute_test()
 				visibility: GPUShaderStage.COMPUTE,
 				storageTexture: {
 					access: "write-only",
-					format: "rgba8unorm",
+					format: "rgba8uint",
 					viewDimension: "2d"
 				}
 			},
@@ -496,8 +538,8 @@ async function compute_test()
 
 	{ // direct lighting (dl) pass, does some lightweight ray-tracing
 		// rt in 2x lower resolution
-		var dlPassWidth = Math.ceil(Math.sqrt(1/2)*canvas.width);
-		var dlPassHeight = Math.ceil(Math.sqrt(1/2)*canvas.height);
+		dlPassWidth = Math.ceil(Math.sqrt(1/2)*canvas.width);
+		dlPassHeight = Math.ceil(Math.sqrt(1/2)*canvas.height);
 
 		var dlPassConstantsBuffer = device.createBuffer({
 			size: 96,
@@ -546,8 +588,7 @@ async function compute_test()
 					binding: 3,
 					visibility: GPUShaderStage.COMPUTE,
 					buffer: {
-						type: "read-only-storage",
-					}
+						type: "read-only-storage", }
 				},
 				{
 					binding: 4,
@@ -563,7 +604,7 @@ async function compute_test()
 					visibility: GPUShaderStage.COMPUTE,
 					texture: {
 						multisampled: false,
-						sampleType: "float",
+						sampleType: "uint",
 						viewDimension: "2d",
 					}
 				}
@@ -647,8 +688,8 @@ async function compute_test()
 
 		var applyPassTexture = device.createTexture({
 			size: {
-				width: canvas.width,
-				height: canvas.height,
+				width: screen.width,
+				height: screen.height,
 			},
 			dimension: "2d",
 			format: "rgba8unorm",
@@ -657,7 +698,7 @@ async function compute_test()
 				| GPUTextureUsage.TEXTURE_BINDING,
 			viewFormats: [],
 		});
-		let applyPassTextureView = applyPassTexture.createView();
+		var applyPassTextureView = applyPassTexture.createView();
 
 		var applyPassBindGroupLayout = device.createBindGroupLayout({
 			entries: [
@@ -675,7 +716,7 @@ async function compute_test()
 					visibility: GPUShaderStage.COMPUTE,
 					texture: {
 						multisampled: false,
-						sampleType: "float",
+						sampleType: "uint",
 						viewDimension: "2d"
 					}
 				},
@@ -775,17 +816,10 @@ async function compute_test()
 		// NOTE: this is only used for smaller writes!
 		// for entire writes queue.writeBuffer is used instead
 	
-		var uaMaxChunks = 32768;
-		var uaChunkDataBufferSize = 32768*(4*4*4)*4;
-		var uaChunkDataBuffer = device.createBuffer({
-			size: uaChunkDataBufferSize,
-			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-			mappedAtCreation: false
-		});
-		var uaChunkIndicesBufferSize = 32768*4;
-		// written to by using queue.writeBuffer
-		var uaChunkIndicesBuffer = device.createBuffer({
-			size: uaChunkIndicesBufferSize,
+		// (val+3) & ~3 to force divisible by 4
+		var uaBufferSize = (32768*64*2*4 + 4*2+15) & ~15;
+		var uaBuffer = device.createBuffer({
+			size: uaBufferSize,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 			mappedAtCreation: false
 		});
@@ -806,13 +840,6 @@ async function compute_test()
 						type: "read-only-storage",
 					}
 				},
-				{
-					binding: 2,
-					visibility: GPUShaderStage.COMPUTE,
-					buffer: {
-						type: "read-only-storage"
-					}
-				}
 			]
 		});
 
@@ -828,20 +855,16 @@ async function compute_test()
 				{
 					binding: 1,
 					resource: {
-						buffer: uaChunkDataBuffer,
-					}
-				},
-				{
-					binding: 2,
-					resource: {
-						buffer: uaChunkIndicesBuffer,
+						buffer: uaBuffer,
 					}
 				},
 			]
 		});
 
 		var uaPipelineLayout = device.createPipelineLayout({
-			bindGroupLayouts: [uaBindGroupLayout]
+			bindGroupLayouts: shaderDebugEnabled
+				? [uaBindGroupLayout, debugBindGroupLayout]
+				: [uaBindGroupLayout]
 		});
 
 		let uaComputeShaderSource = await (
@@ -850,6 +873,15 @@ async function compute_test()
 		let uaComputeShaderModule = device.createShaderModule({
 			code: uaComputeShaderSource
 		});
+		if (typeof(uaComputeShaderModule.compilationInfo) == "function") {
+			uaComputeShaderModule.compilationInfo().then((info) => {
+				for (let i = 0; i < info.messages.length; i++) {
+					console.log("src/update_acceleration.wgsl: "
+						+ info.messages[i].type +
+						": " + info.messages[i].message);
+				}
+			});
+		}
 
 		var uaComputePipeline = device.createComputePipeline({
 			layout: uaPipelineLayout,
@@ -861,16 +893,15 @@ async function compute_test()
 	}
 
 	{ // update chunkBuffer (uc) compute pipeline creation
-		var ucMaxChunks = 32768;
-		var ucChunkDataBufferSize = 32768*(8*8*8)*4;
-		var ucChunkDataBuffer = device.createBuffer({
-			size: ucChunkDataBufferSize,
+		// max workgroup count (x): 32768
+		// max chunks/frame = 32768/2 = 16384
+		var ucVoxelBufferSize = (32768*(8*8*4)*4 + 15) & ~15; var ucVoxelBuffer = device.createBuffer({ size: ucVoxelBufferSize,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 			mappedAtCreation: false
 		});
-		var ucChunkIndicesBufferSize = 32768*4;
-		var ucChunkIndicesBuffer = device.createBuffer({
-			size: ucChunkIndicesBufferSize,
+		var ucIndexBufferSize = (16384*4 + 15) & ~15;
+		var ucIndexBuffer = device.createBuffer({
+			size: ucIndexBufferSize,
 			usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
 			mappedAtCreation: false
 		});
@@ -913,13 +944,13 @@ async function compute_test()
 				{
 					binding: 1,
 					resource: {
-						buffer: ucChunkDataBuffer,
+						buffer: ucVoxelBuffer,
 					}
 				},
 				{
 					binding: 2,
 					resource: {
-						buffer: ucChunkIndicesBuffer,
+						buffer: ucIndexBuffer,
 					}
 				}
 			]
@@ -935,6 +966,14 @@ async function compute_test()
 		let ucComputeShaderModule = device.createShaderModule({
 			code: ucComputeShaderSource
 		});
+		if (typeof(ucComputeShaderModule.compilationInfo) == "function") {
+			ucComputeShaderModule.compilationInfo().then((info) => {
+				for (let i = 0; i < info.messages.length; i++) {
+					console.log("src/update_chunk.wgsl: " + info.messages[i].type +
+						": " + info.messages[i].message);
+				}
+			});
+		}
 		
 		var ucComputePipeline = device.createComputePipeline({
 			layout: ucPipelineLayout,
@@ -944,19 +983,122 @@ async function compute_test()
 			}
 		});
 	}
-
 	let commandEncoder;
 	
 	let debugStringElement = document.getElementById("debugString");
-	debugStringElement.style = "display: none;";
+	//debugStringElement.style = "display: none;";
 
 	let frames = [];
 
+	let uaCount = 0;
+	let ucCount = 0;
+
+	function resize_canvas()
+	{
+		canvas.width = window.innerWidth;
+		canvas.height = window.innerHeight;
+
+		dlPassWidth = Math.ceil(Math.sqrt(1/2)*canvas.width);
+		dlPassHeight = Math.ceil(Math.sqrt(1/2)*canvas.height);
+		dlPassTexture = device.createTexture({
+			size: {
+				width: Math.ceil(dlPassWidth),
+				height: Math.ceil(dlPassHeight),
+			},
+			dimension: "2d",
+			format: "rgba16float",
+			usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING,
+			viewFormats:[],
+		});
+		dlPassTextureView = dlPassTexture.createView();
+
+		// TODO: make bind group creation into functions
+		dlPassBindGroup = device.createBindGroup({
+			layout: dlPassBindGroupLayout,
+			entries: [
+				{
+					binding: 0,
+					resource: dlPassTextureView
+				},
+				{
+					binding: 1,
+					resource: {
+						buffer: dlPassConstantsBuffer,
+					}
+				},
+				{
+					binding: 2,
+					resource: {
+						buffer: chunkBuffer
+					}
+				},
+				{
+					binding: 3,
+					resource: {
+						buffer: accelerationBuffer
+					}
+				},
+				{
+					binding: 4,
+					resource: depthTextureView,
+				},
+				{
+					binding: 5,
+					resource: pass2TextureView,
+				}
+			]
+		});
+		applyPassBindGroup = device.createBindGroup({
+			layout: applyPassBindGroupLayout,
+			entries: [
+				{
+					binding: 0,
+					resource: applyPassTextureView,
+				},
+				{
+					binding: 1,
+					resource: pass2TextureView,
+				},
+				{
+					binding: 2,
+					resource: dlPassTextureView,
+				},
+				{
+					binding: 3,
+					resource: {
+						buffer: applyPassConstantsBuffer
+					}
+				},
+				{
+					binding: 4,
+					resource: skyBoxTextureView
+				},
+				{
+					binding: 5,
+					resource: skyBoxSampler,
+				}
+			]
+		});
+	}
+
 	let oldTime = performance.now()/1000;
-	const render_frame = async () => {
+	async function render_frame() {
+		if (window.innerWidth != canvas.width || window.innerHeight != canvas.height) {
+			resize_canvas();
+		}
 		let newTime = performance.now()/1000;
 		let deltaTime = newTime-oldTime;
 		oldTime = newTime;
+		
+		if (inMenu) {
+			mouseYaw += deltaTime;
+
+			cameraAxis[0] = Math.cos(mouseYaw*Math.PI/180)
+				* Math.cos(mousePitch*Math.PI/180);
+			cameraAxis[1] = Math.sin(mousePitch*Math.PI/180);
+			cameraAxis[2] = Math.sin(mouseYaw*Math.PI/180)
+				* Math.cos(mousePitch*Math.PI/180);
+		}
 		
 		while (frames.length > 0 && (newTime) > (frames[0]+1)) {
 			frames.shift();
@@ -965,9 +1107,10 @@ async function compute_test()
 
 		let chunkStr = "\nChunk Info:";
 		{
-			let debugVoxelIndex = (Math.floor(cameraPos[0] / 8))
-				| ((Math.floor(cameraPos[1] / 8))<<8)
-				| ((Math.floor(cameraPos[2] / 8))<<16);
+			let debugVoxelIndex = (Math.floor(get_camera_pos()[0] / 8))
+				| ((Math.floor(get_camera_pos()[1] / 8))<<8)
+				| ((Math.floor(get_camera_pos()[2] / 8))<<16);
+			chunkStr += "\n\tacceleration index: " + debugVoxelIndex;
 			let debugVoxel = abMemory[debugVoxelIndex];
 			chunkStr += "\n\tRaw data: " + debugVoxel;
 			switch ((3 << 30) & debugVoxel) {
@@ -993,13 +1136,13 @@ async function compute_test()
 				chunkStr += "\n\tzPos: " + ((debugVoxel >> 25) & 0b11111);
 			}
 			if ((debugVoxel & (3 << 30)) == 0) {
-				let vx = Math.floor(cameraPos[0]) % 8;
-				let vy = Math.floor(cameraPos[1]) % 8;
-				let vz = Math.floor(cameraPos[2]) % 8;
+				let vx = Math.floor(get_camera_pos()[0]) % 8;
+				let vy = Math.floor(get_camera_pos()[1]) % 8;
+				let vz = Math.floor(get_camera_pos()[2]) % 8;
 				
-				let vcx = Math.floor(cameraPos[0]) % 32;
-				let vcy = Math.floor(cameraPos[1]) % 32;
-				let vcz = Math.floor(cameraPos[2]) % 32;
+				let vcx = Math.floor(get_camera_pos()[0]) % 32;
+				let vcy = Math.floor(get_camera_pos()[1]) % 32;
+				let vcz = Math.floor(get_camera_pos()[2]) % 32;
 
 				let voxel = cbMemory[debugVoxel|vx|(vy<<3)|(vz<<6)];
 				chunkStr += "\nVoxel Info: (" +vx + "," +vy+","+vz+")" +
@@ -1016,16 +1159,17 @@ async function compute_test()
 
 		let debugString =
 			/*"FPS: " + frames.length +*/
-			"\ncamera pos x: " + cameraPos[0] + 
-			"\ncamera pos y: " + cameraPos[1] + 
-			"\ncamera pos z: " + cameraPos[2] + 
+			"debug:" +
+			"\ncamera pos x: " + get_camera_pos()[0] + 
+			"\ncamera pos y: " + get_camera_pos()[1] + 
+			"\ncamera pos z: " + get_camera_pos()[2] + 
 			"\ncamera dir x: " + cameraAxis[0] + 
 			"\ncamera dir y: " + cameraAxis[1] + 
 			"\ncamera dir z: " + cameraAxis[2] + 
 			"\nacceleration: " +
-			Math.floor(cameraPos[0] / 8) + ", " +
-			Math.floor(cameraPos[1] / 8) + ", " +
-			Math.floor(cameraPos[2] / 8) +
+			Math.floor(get_camera_pos()[0] / 8) + ", " +
+			Math.floor(get_camera_pos()[1] / 8) + ", " +
+			Math.floor(get_camera_pos()[2] / 8) +
 			"\nshaderDebugEnabled: " + shaderDebugEnabled +
 			"\nAPI: webgpu" + chunkStr;
 		debugStringElement.innerHTML = debugString;
@@ -1088,9 +1232,9 @@ async function compute_test()
 		pass2ConstantsBufferUint32[0] = canvas.width;
 		pass2ConstantsBufferUint32[1] = canvas.height;
 		// 2-3 = padding, cameraPos:
-		pass2ConstantsBufferFloat32[4] = cameraPos[0];
-		pass2ConstantsBufferFloat32[5] = cameraPos[1];
-		pass2ConstantsBufferFloat32[6] = cameraPos[2];
+		pass2ConstantsBufferFloat32[4] = get_camera_pos()[0];
+		pass2ConstantsBufferFloat32[5] = get_camera_pos()[1];
+		pass2ConstantsBufferFloat32[6] = get_camera_pos()[2];
 		// vert0:
 		pass2ConstantsBufferFloat32[8] = vert0[0];
 		pass2ConstantsBufferFloat32[9] = vert0[1];
@@ -1119,9 +1263,9 @@ async function compute_test()
 		pass1ConstantsBufferUint32[1] = canvas.height;
 		pass1ConstantsBufferUint32[2] = 0;
 		pass1ConstantsBufferUint32[3] = 0;
-		pass1ConstantsBufferFloat32[4] = cameraPos[0];
-		pass1ConstantsBufferFloat32[5] = cameraPos[1];
-		pass1ConstantsBufferFloat32[6] = cameraPos[2];
+		pass1ConstantsBufferFloat32[4] = get_camera_pos()[0];
+		pass1ConstantsBufferFloat32[5] = get_camera_pos()[1];
+		pass1ConstantsBufferFloat32[6] = get_camera_pos()[2];
 		pass1ConstantsBufferFloat32[8] = vert0[0];
 		pass1ConstantsBufferFloat32[9] = vert0[1];
 		pass1ConstantsBufferFloat32[10] = vert0[2];
@@ -1146,9 +1290,9 @@ async function compute_test()
 		dlPassConstantsBufferUint32[1] = dlPassHeight;
 		dlPassConstantsBufferUint32[2] = canvas.width;
 		dlPassConstantsBufferUint32[3] = canvas.height;
-		dlPassConstantsBufferFloat32[4] = cameraPos[0];
-		dlPassConstantsBufferFloat32[5] = cameraPos[1];
-		dlPassConstantsBufferFloat32[6] = cameraPos[2];
+		dlPassConstantsBufferFloat32[4] = get_camera_pos()[0];
+		dlPassConstantsBufferFloat32[5] = get_camera_pos()[1];
+		dlPassConstantsBufferFloat32[6] = get_camera_pos()[2];
 		dlPassConstantsBufferFloat32[8] = vert0[0];
 		dlPassConstantsBufferFloat32[9] = vert0[1];
 		dlPassConstantsBufferFloat32[10] = vert0[2];
@@ -1177,10 +1321,12 @@ async function compute_test()
 			0,
 			96
 		);
-
+		
 		commandEncoder = device.createCommandEncoder();
 		if (shaderDebugEnabled) {
-			commandEncoder.clearBuffer(debugMsgBuffer, 0, 65536);
+			if (typeof(commandEncoder.clearBuffer) == "function") {
+				commandEncoder.clearBuffer(debugMsgBuffer, 0, 65536);
+			}
 		}
 
 		let pass1PassEncoder = commandEncoder.beginComputePass();
@@ -1274,7 +1420,7 @@ async function compute_test()
 		*/
 
 		if (shaderDebugEnabled) {
-			device.queue.onSubmittedWorkDone().then(()=> {
+			//device.queue.onSubmittedWorkDone().then(()=> {
 				mappedDebugMsgBuffer.mapAsync(GPUMapMode.READ).then(() => {
 					let memory = mappedDebugMsgBuffer.getMappedRange();
 					let array = new Uint32Array(memory);
@@ -1303,9 +1449,187 @@ async function compute_test()
 					
 					requestAnimationFrame(render_frame);
 				});
-			});
+			//});
 		} else {
 			requestAnimationFrame(render_frame);
+		}
+		let debugMap = {}
+		// update voxels here
+		{
+			ucChunkCount = 0;
+			uaBufferData[0] = 0;
+
+			// used to not sent duplicates to the GPU during update
+			// only send the most recently updated value to the GPU
+			var uaDuplicateFinderMap = { };
+			var ucDuplicateFinderMap = { };
+
+			let updateStructure = {};
+			let names = [
+				"ucIndices",
+				"uaIndices",
+				
+				"ucIndicesCount",
+				"uaIndicesCount",
+
+				"ucWriteIndex",
+				"ucReadIndex",
+				
+				"uaWriteIndex",
+				"uaReadIndex",
+				"transformState",
+			]
+			for (let i = 0; i < names.length; i++) {
+				updateStructure[names[i]] = Atomics.load(updateStructureMemory, i);
+			}
+			console.log(updateStructure.transformState);
+			if (updateStructure.transformState == 2) {
+				let cameraPos = get_camera_pos();
+				cameraPos[0] = cameraPos[0]%8 + 1024;
+				cameraPos[1] = cameraPos[1]%8 + 1024;
+				cameraPos[2] = cameraPos[2]%8 + 1024;
+				set_camera_pos(cameraPos);
+				updateStructure.uaReadIndex = updateStructure.uaWriteIndex;
+				updateStructure.ucReadIndex == updateStructure.ucWriteIndex;
+				updateStructureMemory[8] = 0;
+
+				copiedAbMemory = abMemory.slice().buffer;
+				copiedCbMemory = cbMemory.slice().buffer;
+				queue.writeBuffer(
+					chunkBuffer,
+					0, // bufferOffset
+					copiedCbMemory,
+					0, // dataOffset
+					chunkBufferSize // size
+				);
+				
+				queue.writeBuffer(
+					accelerationBuffer,
+					0, // bufferOffset
+					copiedAbMemory,
+					0, // dataOffset
+					accelerationBufferSize // size
+				);
+			}
+
+
+			while (true) {
+				if (updateStructure.uaReadIndex == updateStructure.uaWriteIndex) {
+					break;
+				}
+				if (Math.ceil(uaBufferData[0]/2/64) >= 32768-1) {
+					break;
+				}
+				let accelerationIndex = Atomics.load(Module.HEAP32,
+					(updateStructure.uaIndices>>2)+updateStructure.uaReadIndex
+				);
+				if (accelerationIndex >= 256*256*256) {
+					console.log("nooo. :" + accelerationIndex + ", " + updateStructure.uaReadIndex);
+				}
+				updateStructure.uaReadIndex = (updateStructure.uaReadIndex+1)
+					% updateStructure.uaIndicesCount;
+				Atomics.store(updateStructureMemory, 7, updateStructure.uaReadIndex);
+
+				let duplicateAddress = uaDuplicateFinderMap[accelerationIndex];
+
+				let mem = Atomics.load(abMemory, accelerationIndex);
+				if (duplicateAddress == undefined) {
+					let location = uaBufferData[0];
+					uaBufferData[2+uaBufferData[0]++] = accelerationIndex;
+					uaBufferData[2+uaBufferData[0]++] = mem;
+					uaDuplicateFinderMap[accelerationIndex] = location;
+				} else {
+					uaBufferData[2+duplicateAddress] = accelerationIndex;
+					uaBufferData[2+duplicateAddress+1] = mem;
+				}
+				
+				// debug
+				uaCount++;
+			}
+			
+			while (true) {
+				if (updateStructure.ucReadIndex == updateStructure.ucWriteIndex) {
+					break;
+				}
+				if ((ucChunkCount<<1) >= 32768-1) {
+					break;
+				}
+				let accelerationIndex = Atomics.load(Module.HEAP32,
+					(updateStructure.ucIndices>>2)+updateStructure.ucReadIndex
+				);
+				updateStructure.ucReadIndex = (updateStructure.ucReadIndex+1)
+					% updateStructure.ucIndicesCount;
+				Atomics.store(updateStructureMemory, 5, updateStructure.ucReadIndex);
+				let chunkOffset = Atomics.load(abMemory,accelerationIndex);
+				ucIndexBufferData[ucChunkCount] = chunkOffset;
+				
+				let duplicateAddress = ucDuplicateFinderMap[accelerationIndex];
+				let location;
+				if (duplicateAddress == undefined) {
+					location = ucChunkCount*512;
+					ucChunkCount++;
+					ucDuplicateFinderMap[accelerationIndex] = location;
+				} else {
+					location = duplicateAddress;
+				}
+				for (let i = 0; i < 512; i++) {
+					ucVoxelBufferData[location+i] = Atomics.load(cbMemory, chunkOffset+i);
+				}
+
+				// debug
+				ucCount++;
+			}
+		}
+		if (uaBufferData[0] != 0) {
+			uaBufferData[1] = testingVar;
+			queue.writeBuffer(
+				uaBuffer,
+				0,
+				uaBufferData,
+				0,
+				((uaBufferData[0]+2)+3)&~3
+			);
+			let testCommandEncoder = device.createCommandEncoder();
+			let testPassEncoder = testCommandEncoder.beginComputePass();
+			testPassEncoder.setPipeline(uaComputePipeline);
+			testPassEncoder.setBindGroup(0, uaBindGroup);
+			if (shaderDebugEnabled) {
+				testPassEncoder.setBindGroup(1, debugBindGroup);
+			}
+			testPassEncoder.dispatchWorkgroups(Math.ceil(uaBufferData[0]/2/64));
+			if (testPassEncoder.end == undefined) {
+				testPassEncoder.endPass();
+			} else {
+				testPassEncoder.end();
+			}
+			device.queue.submit([testCommandEncoder.finish()]);
+		}
+		if (ucChunkCount != 0) {
+			queue.writeBuffer(
+				ucVoxelBuffer,
+				0,
+				ucVoxelBufferData,
+				0,
+				((512*ucChunkCount)+3)&~3
+			);
+			queue.writeBuffer(
+				ucIndexBuffer,
+				0,
+				ucIndexBufferData,
+				0,
+				(ucChunkCount+3)&~3
+			);
+			let testCommandEncoder = device.createCommandEncoder();
+			let testPassEncoder = testCommandEncoder.beginComputePass();
+			testPassEncoder.setPipeline(ucComputePipeline);
+			testPassEncoder.setBindGroup(0, ucBindGroup);
+			testPassEncoder.dispatchWorkgroups(ucChunkCount<<1);
+			if (testPassEncoder.end == undefined) {
+				testPassEncoder.endPass();
+			} else {
+				testPassEncoder.end();
+			}
+			device.queue.submit([testCommandEncoder.finish()]);
 		}
 	};
 
@@ -1332,22 +1656,22 @@ function calculate_movement(deltaTime)
 	let scaledUpVector = [0.0, speed, 0.0];
 
 	if (keysPressed.Space) {
-		cameraPos = add_vec3(cameraPos, scaledUpVector);
+		set_camera_pos(add_vec3(get_camera_pos(), scaledUpVector));
 	}
 	if (keysPressed.ShiftLeft) {
-		cameraPos = sub_vec3(cameraPos, scaledUpVector);
+		set_camera_pos(sub_vec3(get_camera_pos(), scaledUpVector));
 	}
 	if (keysPressed.KeyW) {
-		cameraPos = add_vec3(cameraPos, verticalVector);
+		set_camera_pos(add_vec3(get_camera_pos(), verticalVector));
 	}
 	if (keysPressed.KeyS) {
-		cameraPos = sub_vec3(cameraPos, verticalVector);
+		set_camera_pos(sub_vec3(get_camera_pos(), verticalVector));
 	}
 	if (keysPressed.KeyA) {
-		cameraPos = sub_vec3(cameraPos, horizontalVector);
+		set_camera_pos(sub_vec3(get_camera_pos(), horizontalVector));
 	}
 	if (keysPressed.KeyD) {
-		cameraPos = add_vec3(cameraPos, horizontalVector);
+		set_camera_pos(add_vec3(get_camera_pos(), horizontalVector));
 	}
 }
 
@@ -1398,4 +1722,9 @@ function sub_vec3(a, b)
 		a[1]-b[1],
 		a[2]-b[2],
 	];
+}
+
+function apply_transformation()
+{
+	console.log("working?");
 }

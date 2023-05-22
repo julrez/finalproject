@@ -18,12 +18,13 @@ fn main(
 		@builtin(workgroup_id) workgroupID: vec3<u32>,
 		@builtin(local_invocation_id) localID: vec3<u32>)
 {
-	let workgroupIndex = chunkIndices[workgroupID.x];
-	let writeIndex = workgroupIndex
+	let offset = 0u
 		+ (localID.z << 6u)
 		+ (localID.y << 3u)
 		+ (localID.x);
-	let readIndex = globalID.x;
-	
+	let writeIndex = chunkIndices[workgroupID.x>>1u] + offset
+		+ ((workgroupID.x&1u) << 8u);
+	let readIndex = workgroupID.x*256u + offset;
+
 	chunkBuffer[writeIndex] = chunkData[readIndex];
 }

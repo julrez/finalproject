@@ -4,8 +4,8 @@ const {exec} = require('child_process');
 
 let files = {};
 
-let debugFlags = " -O0 -s ASSERTIONS -sSAFE_HEAP=1 -sSAFE_HEAP_LOG=1";
-let releaseFlags = " -O3";
+let debugFlags = " -fsanitize=address";
+let releaseFlags = " -O3 -g -fdebug-compilation-dir='../../'";
 
 //let memoryFlags = " -s ALLOW_MEMORY_GROWTH=0 -s INITIAL_MEMORY=4294901760";
 let memoryFlags = " -s ALLOW_MEMORY_GROWTH=1";

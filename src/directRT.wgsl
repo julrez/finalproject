@@ -15,7 +15,7 @@ struct Constants {
 @group(0) @binding(2) var<storage, read> chunkBuffer: array<u32>;
 @group(0) @binding(3) var<storage, read> accelerationBuffer: array<u32>;
 @group(0) @binding(4) var depthTexture: texture_2d<f32>;
-@group(0) @binding(5) var colorTexture: texture_2d<f32>;
+@group(0) @binding(5) var colorTexture: texture_2d<u32>;
 
 /*
 @group(1) @binding(0) var<storage, read_write> debugInfo: DebugMsgInfo;
@@ -217,9 +217,9 @@ fn main(@builtin(global_invocation_id) globalID: vec3<u32>)
 
 	// calculate normal
 	var normal: vec3<f32>;
-	if (inputColor.g == 0f) { // x
+	if (inputColor.g == 0u) { // x
 		normal = vec3<f32>(-sign(cameraRayDir.x), 0f, 0f);
-	} else if (inputColor.g < 0.8f) { // y
+	} else if (inputColor.g == 1u) { // y
 		normal = vec3<f32>(0f, -sign(cameraRayDir.y), 0f);
 	} else { // z
 		normal = vec3<f32>(0f, 0f, -sign(cameraRayDir.z));

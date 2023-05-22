@@ -10,9 +10,6 @@ struct Constants {
 	vert3: vec3f,
 }
 
-const VISUALIZE_ITERATIONS = false;
-const VISUALIZE_BOTH = false;
-
 /*
  * voxel format:
  *     - top 2 bits: type
@@ -25,7 +22,7 @@ const VISUALIZE_BOTH = false;
 // outputTexture:
 // red channel: voxel
 // green channel: which face intersected
-@group(0) @binding(0) var outputTexture: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(0) var outputTexture: texture_storage_2d<rgba8uint, write>;
 @group(0) @binding(1) var<uniform> constants: Constants;
 @group(0) @binding(2) var<storage, read> chunkBuffer: array<u32>;
 @group(0) @binding(3) var<storage, read> accelerationBuffer: array<u32>;
@@ -182,34 +179,26 @@ fn main(@builtin(global_invocation_id) globalID: vec3<u32>)
 		newPos.z = bitcast<f32>(bitcast<u32>(newPos.z)+addULP.z);
 		gridPos = vec3<u32>(newPos);
 	}
-	if (VISUALIZE_ITERATIONS) {
-		textureStore(outputTexture, vec2(globalID.xy), vec4<f32>(f32(i)/255.0f, 0f, 0f, 1f));
-		return;
-	}
 	let newDepth = newTmin+addDepth;
 
-	var color: vec4<f32>;
+	var color: vec4<u32>;
 	var depth: vec4<f32>;
 	if ((voxel & 3221225472u) == 0u) { // hit
-		color = vec4<f32>(f32(voxel & 31u) / 31f * 0.5f + 0.5f, 0f, 0f, 1f);
+		color = vec4<u32>(voxel, 0u, 0u, 0u);
 		depth = vec4<f32>(newDepth, 0f, 0f, 0f);
 
 		// calculate which face intersected
 		// TODO: move face calculation to directRT.wgsl instead
 		if (tmin == t.x) {
-			color.g = 0f;
+			color.g = 0u;
 		} else if (tmin == t.y) {
-			color.g = 0.5f;
+			color.g = 1u;
 		} else {
-			color.g = 1f;
+			color.g = 2u;
 		}
 	} else { // miss
-		color = vec4<f32>(0f, 0f, 0f, 1f);
+		color = vec4<u32>(0u, 0u, 0u, 0u);
 		depth = vec4<f32>(0f, 0f, 0f, 0f);
-	}
-	if (VISUALIZE_BOTH) {
-		textureStore(outputTexture, vec2(globalID.xy), vec4<f32>(color.r, f32(i)/255.0f, 0f, 1f));
-		return;
 	}
 	textureStore(outputTexture, vec2(globalID.xy), color);
 	textureStore(depthTexture, vec2(globalID.xy), depth);
