@@ -85,7 +85,7 @@ function playOnClick()
 
 let selectedSetting = 0;
 let totalSettingCount = 3;
-let defaultSettings = [256, 50, 100];
+let defaultSettings = [256, 0, 100];
 
 function settingsOnClick()
 {
@@ -951,8 +951,7 @@ async function compute_test()
 		});
 	}
 
-	{ // direct lighting (dl) pass, does some lightweight ray-tracing
-		// rt in 2x lower resolution
+	{ // direct lighting (dl) pass, does some lightweight (local illumination) ray-tracing
 		dlPassWidth = Math.ceil(Math.sqrt(lightingPercentage)*canvas.width);
 		dlPassHeight = Math.ceil(Math.sqrt(lightingPercentage)*canvas.height);
 

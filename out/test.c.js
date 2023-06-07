@@ -122,10 +122,10 @@ if (ENVIRONMENT_IS_NODE) {
   assert(ret.buffer);
   return ret;
  };
- readAsync = (filename, onload, onerror) => {
+ readAsync = (filename, onload, onerror, binary = true) => {
   filename = isFileURI(filename) ? new URL(filename) : nodePath.normalize(filename);
-  fs.readFile(filename, function(err, data) {
-   if (err) onerror(err); else onload(data.buffer);
+  fs.readFile(filename, binary ? undefined : "utf8", (err, data) => {
+   if (err) onerror(err); else onload(binary ? data.buffer : data);
   });
  };
  if (!Module["thisProgram"] && process.argv.length > 1) {
@@ -135,14 +135,14 @@ if (ENVIRONMENT_IS_NODE) {
  if (typeof module != "undefined") {
   module["exports"] = Module;
  }
- process.on("uncaughtException", function(ex) {
+ process.on("uncaughtException", ex => {
   if (ex !== "unwind" && !(ex instanceof ExitStatus) && !(ex.context instanceof ExitStatus)) {
    throw ex;
   }
  });
  var nodeMajor = process.versions.node.split(".")[0];
  if (nodeMajor < 15) {
-  process.on("unhandledRejection", function(reason) {
+  process.on("unhandledRejection", reason => {
    throw reason;
   });
  }
@@ -150,9 +150,7 @@ if (ENVIRONMENT_IS_NODE) {
   process.exitCode = status;
   throw toThrow;
  };
- Module["inspect"] = function() {
-  return "[Emscripten Module object]";
- };
+ Module["inspect"] = () => "[Emscripten Module object]";
  let nodeWorkerThreads;
  try {
   nodeWorkerThreads = require("worker_threads");
@@ -164,11 +162,11 @@ if (ENVIRONMENT_IS_NODE) {
 } else if (ENVIRONMENT_IS_SHELL) {
  if (typeof process == "object" && typeof require === "function" || typeof window == "object" || typeof importScripts == "function") throw new Error("not compiled for this environment (did you build to HTML and try to run it not on the web, or set ENVIRONMENT to something - like node - and run it someplace else - like on the web?)");
  if (typeof read != "undefined") {
-  read_ = function shell_read(f) {
+  read_ = f => {
    return read(f);
   };
  }
- readBinary = function readBinary(f) {
+ readBinary = f => {
   let data;
   if (typeof readbuffer == "function") {
    return new Uint8Array(readbuffer(f));
@@ -177,7 +175,7 @@ if (ENVIRONMENT_IS_NODE) {
   assert(typeof data == "object");
   return data;
  };
- readAsync = function readAsync(f, onload, onerror) {
+ readAsync = (f, onload, onerror) => {
   setTimeout(() => onload(readBinary(f)), 0);
  };
  if (typeof clearTimeout == "undefined") {
@@ -196,7 +194,7 @@ if (ENVIRONMENT_IS_NODE) {
      if (toThrow && typeof toThrow == "object" && toThrow.stack) {
       toLog = [ toThrow, toThrow.stack ];
      }
-     err("exiting due to exception: " + toLog);
+     err(`exiting due to exception: ${toLog}`);
     }
     quit(status);
    });
@@ -264,11 +262,11 @@ if (ENVIRONMENT_IS_NODE) {
 
 var defaultPrint = console.log.bind(console);
 
-var defaultPrintErr = console.warn.bind(console);
+var defaultPrintErr = console.error.bind(console);
 
 if (ENVIRONMENT_IS_NODE) {
- defaultPrint = str => fs.writeSync(1, str + "\n");
- defaultPrintErr = str => fs.writeSync(2, str + "\n");
+ defaultPrint = (...args) => fs.writeSync(1, args.join(" ") + "\n");
+ defaultPrintErr = (...args) => fs.writeSync(2, args.join(" ") + "\n");
 }
 
 var out = Module["print"] || defaultPrint;
@@ -544,7 +542,7 @@ function addRunDependency(id) {
   assert(!runDependencyTracking[id]);
   runDependencyTracking[id] = 1;
   if (runDependencyWatcher === null && typeof setInterval != "undefined") {
-   runDependencyWatcher = setInterval(function() {
+   runDependencyWatcher = setInterval(() => {
     if (ABORT) {
      clearInterval(runDependencyWatcher);
      runDependencyWatcher = null;
@@ -693,35 +691,29 @@ function getBinaryPromise(binaryFile) {
   if (typeof fetch == "function" && !isFileURI(binaryFile)) {
    return fetch(binaryFile, {
     credentials: "same-origin"
-   }).then(function(response) {
+   }).then(response => {
     if (!response["ok"]) {
      throw "failed to load wasm binary file at '" + binaryFile + "'";
     }
     return response["arrayBuffer"]();
-   }).catch(function() {
-    return getBinary(binaryFile);
-   });
+   }).catch(() => getBinary(binaryFile));
   } else {
    if (readAsync) {
-    return new Promise(function(resolve, reject) {
-     readAsync(binaryFile, function(response) {
-      resolve(new Uint8Array(response));
-     }, reject);
+    return new Promise((resolve, reject) => {
+     readAsync(binaryFile, response => resolve(new Uint8Array(response)), reject);
     });
    }
   }
  }
- return Promise.resolve().then(function() {
-  return getBinary(binaryFile);
- });
+ return Promise.resolve().then(() => getBinary(binaryFile));
 }
 
 function instantiateArrayBuffer(binaryFile, imports, receiver) {
- return getBinaryPromise(binaryFile).then(function(binary) {
+ return getBinaryPromise(binaryFile).then(binary => {
   return WebAssembly.instantiate(binary, imports);
- }).then(function(instance) {
+ }).then(instance => {
   return instance;
- }).then(receiver, function(reason) {
+ }).then(receiver, reason => {
   err("failed to asynchronously prepare wasm: " + reason);
   if (isFileURI(wasmBinaryFile)) {
    err("warning: Loading from a file URI (" + wasmBinaryFile + ") is not supported in most browsers. See https://emscripten.org/docs/getting_started/FAQ.html#how-do-i-run-a-local-webserver-for-testing-why-does-my-program-stall-in-downloading-or-preparing");
@@ -734,7 +726,7 @@ function instantiateAsync(binary, binaryFile, imports, callback) {
  if (!binary && typeof WebAssembly.instantiateStreaming == "function" && !isDataURI(binaryFile) && !isFileURI(binaryFile) && !ENVIRONMENT_IS_NODE && typeof fetch == "function") {
   return fetch(binaryFile, {
    credentials: "same-origin"
-  }).then(function(response) {
+  }).then(response => {
    var result = WebAssembly.instantiateStreaming(response, imports);
    return result.then(callback, function(reason) {
     err("wasm streaming compile failed: " + reason);
@@ -860,8 +852,8 @@ function unexportedRuntimeSymbol(sym) {
 
 function dbg(text) {
  if (ENVIRONMENT_IS_NODE) {
-  fs.writeSync(2, text + "\n");
- } else console.error(text);
+  fs.writeSync(2, Array.from(arguments).join(" ") + "\n");
+ } else console.warn.apply(console, arguments);
 }
 
 function ExitStatus(status) {
@@ -929,7 +921,7 @@ function spawnThread(threadParams) {
   "pthread_ptr": threadParams.pthread_ptr
  };
  if (ENVIRONMENT_IS_NODE) {
-  worker.ref();
+  worker.unref();
  }
  worker.postMessage(msg, threadParams.transferList);
  return 0;
@@ -1012,7 +1004,7 @@ function exitJS(status, implicit) {
   throw "unwind";
  }
  if (keepRuntimeAlive() && !implicit) {
-  var msg = "program exited (with status: " + status + "), but keepRuntimeAlive() is set (counter=" + runtimeKeepaliveCounter + ") due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown)";
+  var msg = `program exited (with status: ${status}), but keepRuntimeAlive() is set (counter=${runtimeKeepaliveCounter}) due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown)`;
   err(msg);
  }
  _proc_exit(status);
@@ -1032,7 +1024,7 @@ function handleException(e) {
  checkStackCookie();
  if (e instanceof WebAssembly.RuntimeError) {
   if (_emscripten_stack_get_current() <= 0) {
-   err("Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to " + 5242880 + ")");
+   err("Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to 5242880)");
   }
  }
  quit_(1, e);
@@ -1094,9 +1086,6 @@ var PThread = {
   PThread.unusedWorkers.push(worker);
   PThread.runningWorkers.splice(PThread.runningWorkers.indexOf(worker), 1);
   worker.pthread_ptr = 0;
-  if (ENVIRONMENT_IS_NODE) {
-   worker.unref();
-  }
   __emscripten_thread_free_data(pthread_ptr);
  },
  receiveObjectTransfer: function(data) {},
@@ -1166,7 +1155,6 @@ var PThread = {
    worker.on("error", function(e) {
     worker.onerror(e);
    });
-   worker.on("detachedExit", function() {});
   }
   assert(wasmMemory instanceof WebAssembly.Memory, "WebAssembly memory should have been loaded by now!");
   assert(wasmModule instanceof WebAssembly.Module, "WebAssembly Module should have been loaded by now!");
@@ -1268,7 +1256,7 @@ function getValue(ptr, type = "i8") {
   return GROWABLE_HEAP_U32()[ptr >> 2];
 
  default:
-  abort("invalid type for getValue: " + type);
+  abort(`invalid type for getValue: ${type}`);
  }
 }
 
@@ -1320,7 +1308,7 @@ function setValue(ptr, value, type = "i8") {
   break;
 
  case "i64":
-  tempI64 = [ value >>> 0, (tempDouble = value, +Math.abs(tempDouble) >= 1 ? tempDouble > 0 ? (Math.min(+Math.floor(tempDouble / 4294967296), 4294967295) | 0) >>> 0 : ~~+Math.ceil((tempDouble - +(~~tempDouble >>> 0)) / 4294967296) >>> 0 : 0) ], 
+  tempI64 = [ value >>> 0, (tempDouble = value, +Math.abs(tempDouble) >= 1 ? tempDouble > 0 ? +Math.floor(tempDouble / 4294967296) >>> 0 : ~~+Math.ceil((tempDouble - +(~~tempDouble >>> 0)) / 4294967296) >>> 0 : 0) ], 
   GROWABLE_HEAP_I32()[ptr >> 2] = tempI64[0], GROWABLE_HEAP_I32()[ptr + 4 >> 2] = tempI64[1];
   break;
 
@@ -1337,7 +1325,7 @@ function setValue(ptr, value, type = "i8") {
   break;
 
  default:
-  abort("invalid type for setValue: " + type);
+  abort(`invalid type for setValue: ${type}`);
  }
 }
 
@@ -1351,15 +1339,11 @@ function warnOnce(text) {
 }
 
 function ___assert_fail(condition, filename, line, func) {
- abort("Assertion failed: " + UTF8ToString(condition) + ", at: " + [ filename ? UTF8ToString(filename) : "unknown filename", line, func ? UTF8ToString(func) : "unknown function" ]);
-}
-
-function ___call_sighandler(fp, sig) {
- getWasmTableEntry(fp)(sig);
+ abort(`Assertion failed: ${UTF8ToString(condition)}, at: ` + [ filename ? UTF8ToString(filename) : "unknown filename", line, func ? UTF8ToString(func) : "unknown function" ]);
 }
 
 function ___emscripten_init_main_thread_js(tb) {
- __emscripten_thread_init(tb, !ENVIRONMENT_IS_WORKER, 1, !ENVIRONMENT_IS_WEB);
+ __emscripten_thread_init(tb, !ENVIRONMENT_IS_WORKER, 1, !ENVIRONMENT_IS_WEB, 5242880);
  PThread.threadInitTLS();
 }
 
@@ -1398,10 +1382,6 @@ function ___pthread_create_js(pthread_ptr, attr, startRoutine, arg) {
   return 0;
  }
  return spawnThread(threadParams);
-}
-
-function __emscripten_default_pthread_stack_size() {
- return 5242880;
 }
 
 var nowIsMonotonic = true;
@@ -1480,34 +1460,10 @@ function __emscripten_set_offscreencanvas_size(target, width, height) {
  return -1;
 }
 
-var timers = {};
-
-var _emscripten_get_now;
-
-if (ENVIRONMENT_IS_NODE) {
- _emscripten_get_now = () => {
-  var t = process.hrtime();
-  return t[0] * 1e3 + t[1] / 1e6;
- };
-} else _emscripten_get_now = () => performance.timeOrigin + performance.now();
-
-function __setitimer_js(which, timeout_ms) {
- if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(4, 1, which, timeout_ms);
- if (timers[which]) {
-  clearTimeout(timers[which].id);
-  delete timers[which];
+function __emscripten_thread_set_strongref(thread) {
+ if (ENVIRONMENT_IS_NODE) {
+  PThread.pthreads[thread].ref();
  }
- if (!timeout_ms) return 0;
- var id = setTimeout(() => {
-  assert(which in timers);
-  delete timers[which];
-  callUserCallback(() => __emscripten_timeout(which, _emscripten_get_now()));
- }, timeout_ms);
- timers[which] = {
-  id: id,
-  timeout_ms: timeout_ms
- };
- return 0;
 }
 
 function _emscripten_check_blocking_allowed() {
@@ -1529,9 +1485,14 @@ function _emscripten_exit_with_live_runtime() {
  throw "unwind";
 }
 
-function _emscripten_memcpy_big(dest, src, num) {
- GROWABLE_HEAP_U8().copyWithin(dest, src, src + num);
-}
+var _emscripten_get_now;
+
+if (ENVIRONMENT_IS_NODE) {
+ _emscripten_get_now = () => {
+  var t = process.hrtime();
+  return t[0] * 1e3 + t[1] / 1e6;
+ };
+} else _emscripten_get_now = () => performance.timeOrigin + performance.now();
 
 function _emscripten_random() {
  return Math.random();
@@ -1581,7 +1542,7 @@ function getHeapMax() {
 }
 
 function abortOnCannotGrowMemory(requestedSize) {
- abort("Cannot enlarge memory arrays to size " + requestedSize + " bytes (OOM). If you want malloc to return NULL (0) instead of this abort, do not link with -sABORTING_MALLOC (that is, the default when growth is enabled is to not abort, but you have overridden that)");
+ abort(`Cannot enlarge memory arrays to size ${requestedSize} bytes (OOM). If you want malloc to return NULL (0) instead of this abort, do not link with -sABORTING_MALLOC (that is, the default when growth is enabled is to not abort, but you have overridden that)`);
 }
 
 function emscripten_realloc_buffer(size) {
@@ -1591,7 +1552,7 @@ function emscripten_realloc_buffer(size) {
   updateMemoryViews();
   return 1;
  } catch (e) {
-  err("emscripten_realloc_buffer: Attempted to grow heap from " + b.byteLength + " bytes to " + size + " bytes, but got error: " + e);
+  err(`emscripten_realloc_buffer: Attempted to grow heap from ${b.byteLength} bytes to ${size} bytes, but got error: ${e}`);
  }
 }
 
@@ -1603,10 +1564,10 @@ function _emscripten_resize_heap(requestedSize) {
  }
  var maxHeapSize = getHeapMax();
  if (requestedSize > maxHeapSize) {
-  err("Cannot enlarge memory, asked to go up to " + requestedSize + " bytes, but the limit is " + maxHeapSize + " bytes!");
+  err(`Cannot enlarge memory, asked to go up to ${requestedSize} bytes, but the limit is ${maxHeapSize} bytes!`);
   abortOnCannotGrowMemory(requestedSize);
  }
- let alignUp = (x, multiple) => x + (multiple - x % multiple) % multiple;
+ var alignUp = (x, multiple) => x + (multiple - x % multiple) % multiple;
  for (var cutDown = 1; cutDown <= 4; cutDown *= 2) {
   var overGrownHeapSize = oldSize * (1 + .2 / cutDown);
   overGrownHeapSize = Math.min(overGrownHeapSize, requestedSize + 100663296);
@@ -1616,7 +1577,7 @@ function _emscripten_resize_heap(requestedSize) {
    return true;
   }
  }
- err("Failed to grow the heap from " + oldSize + " bytes to " + newSize + " bytes, not enough memory!");
+ err(`Failed to grow the heap from ${oldSize} bytes to ${newSize} bytes, not enough memory!`);
  abortOnCannotGrowMemory(requestedSize);
 }
 
@@ -1640,7 +1601,7 @@ function flush_NO_FILESYSTEM() {
 }
 
 function _fd_write(fd, iov, iovcnt, pnum) {
- if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(5, 1, fd, iov, iovcnt, pnum);
+ if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(4, 1, fd, iov, iovcnt, pnum);
  var num = 0;
  for (var i = 0; i < iovcnt; i++) {
   var ptr = GROWABLE_HEAP_U32()[iov >> 2];
@@ -1685,6 +1646,7 @@ function lengthBytesUTF8(str) {
 }
 
 function stringToUTF8Array(str, heap, outIdx, maxBytesToWrite) {
+ assert(typeof str === "string");
  if (!(maxBytesToWrite > 0)) return 0;
  var startIdx = outIdx;
  var endIdx = outIdx + maxBytesToWrite - 1;
@@ -1785,7 +1747,7 @@ function cwrap(ident, returnType, argTypes, opts) {
 
 PThread.init();
 
-var proxiedFunctionTable = [ null, _proc_exit, exitOnMainThread, pthreadCreateProxied, __setitimer_js, _fd_write ];
+var proxiedFunctionTable = [ null, _proc_exit, exitOnMainThread, pthreadCreateProxied, _fd_write ];
 
 function checkIncomingModuleAPI() {
  ignoredModuleProp("fetchSettings");
@@ -1793,21 +1755,18 @@ function checkIncomingModuleAPI() {
 
 var wasmImports = {
  "__assert_fail": ___assert_fail,
- "__call_sighandler": ___call_sighandler,
  "__emscripten_init_main_thread_js": ___emscripten_init_main_thread_js,
  "__emscripten_thread_cleanup": ___emscripten_thread_cleanup,
  "__pthread_create_js": ___pthread_create_js,
- "_emscripten_default_pthread_stack_size": __emscripten_default_pthread_stack_size,
  "_emscripten_get_now_is_monotonic": __emscripten_get_now_is_monotonic,
  "_emscripten_notify_mailbox_postmessage": __emscripten_notify_mailbox_postmessage,
  "_emscripten_set_offscreencanvas_size": __emscripten_set_offscreencanvas_size,
  "_emscripten_thread_mailbox_await": __emscripten_thread_mailbox_await,
- "_setitimer_js": __setitimer_js,
+ "_emscripten_thread_set_strongref": __emscripten_thread_set_strongref,
  "emscripten_check_blocking_allowed": _emscripten_check_blocking_allowed,
  "emscripten_date_now": _emscripten_date_now,
  "emscripten_exit_with_live_runtime": _emscripten_exit_with_live_runtime,
  "emscripten_get_now": _emscripten_get_now,
- "emscripten_memcpy_big": _emscripten_memcpy_big,
  "emscripten_random": _emscripten_random,
  "emscripten_receive_on_main_thread_js": _emscripten_receive_on_main_thread_js,
  "emscripten_resize_heap": _emscripten_resize_heap,
@@ -1878,8 +1837,6 @@ var __emscripten_thread_free_data = createExportWrapper("_emscripten_thread_free
 
 var __emscripten_thread_exit = Module["__emscripten_thread_exit"] = createExportWrapper("_emscripten_thread_exit");
 
-var __emscripten_timeout = createExportWrapper("_emscripten_timeout");
-
 var __emscripten_check_mailbox = Module["__emscripten_check_mailbox"] = createExportWrapper("_emscripten_check_mailbox");
 
 var _emscripten_stack_init = function() {
@@ -1916,11 +1873,11 @@ Module["cwrap"] = cwrap;
 
 Module["ExitStatus"] = ExitStatus;
 
-var missingLibrarySymbols = [ "isLeapYear", "ydayFromDate", "arraySum", "addDays", "setErrNo", "inetPton4", "inetNtop4", "inetPton6", "inetNtop6", "readSockaddr", "writeSockaddr", "getHostByName", "initRandomFill", "randomFill", "traverseStack", "getCallstack", "emscriptenLog", "convertPCtoSourceLocation", "readEmAsmArgs", "jstoi_q", "jstoi_s", "getExecutableName", "listenOnce", "autoResumeAudioContext", "dynCallLegacy", "getDynCaller", "dynCall", "runtimeKeepalivePop", "safeSetTimeout", "asmjsMangle", "asyncLoad", "alignMemory", "mmapAlloc", "HandleAllocator", "getNativeTypeSize", "STACK_SIZE", "STACK_ALIGN", "POINTER_SIZE", "ASSERTIONS", "writeI53ToI64", "writeI53ToI64Clamped", "writeI53ToI64Signaling", "writeI53ToU64Clamped", "writeI53ToU64Signaling", "readI53FromI64", "readI53FromU64", "convertI32PairToI53", "convertI32PairToI53Checked", "convertU32PairToI53", "uleb128Encode", "sigToWasmTypes", "generateFuncType", "convertJsFunctionToWasm", "getEmptyTableSlot", "updateTableMap", "getFunctionAddress", "addFunction", "removeFunction", "reallyNegative", "unSign", "strLen", "reSign", "formatString", "intArrayFromString", "intArrayToString", "AsciiToString", "stringToAscii", "UTF16ToString", "stringToUTF16", "lengthBytesUTF16", "UTF32ToString", "stringToUTF32", "lengthBytesUTF32", "stringToNewUTF8", "getSocketFromFD", "getSocketAddress", "registerKeyEventCallback", "maybeCStringToJsString", "findEventTarget", "findCanvasEventTarget", "getBoundingClientRect", "fillMouseEventData", "registerMouseEventCallback", "registerWheelEventCallback", "registerUiEventCallback", "registerFocusEventCallback", "fillDeviceOrientationEventData", "registerDeviceOrientationEventCallback", "fillDeviceMotionEventData", "registerDeviceMotionEventCallback", "screenOrientation", "fillOrientationChangeEventData", "registerOrientationChangeEventCallback", "fillFullscreenChangeEventData", "registerFullscreenChangeEventCallback", "JSEvents_requestFullscreen", "JSEvents_resizeCanvasForFullscreen", "registerRestoreOldStyle", "hideEverythingExceptGivenElement", "restoreHiddenElements", "setLetterbox", "softFullscreenResizeWebGLRenderTarget", "doRequestFullscreen", "fillPointerlockChangeEventData", "registerPointerlockChangeEventCallback", "registerPointerlockErrorEventCallback", "requestPointerLock", "fillVisibilityChangeEventData", "registerVisibilityChangeEventCallback", "registerTouchEventCallback", "fillGamepadEventData", "registerGamepadEventCallback", "registerBeforeUnloadEventCallback", "fillBatteryEventData", "battery", "registerBatteryEventCallback", "setCanvasElementSizeCallingThread", "setCanvasElementSizeMainThread", "setCanvasElementSize", "getCanvasSizeCallingThread", "getCanvasSizeMainThread", "getCanvasElementSize", "demangle", "demangleAll", "jsStackTrace", "stackTrace", "getEnvStrings", "checkWasiClock", "wasiRightsToMuslOFlags", "wasiOFlagsToMuslOFlags", "createDyncallWrapper", "setImmediateWrapped", "clearImmediateWrapped", "polyfillSetImmediate", "getPromise", "makePromise", "makePromiseCallback", "ExceptionInfo", "exception_addRef", "exception_decRef", "setMainLoop", "_setNetworkCallback", "heapObjectForWebGLType", "heapAccessShiftForWebGLHeap", "webgl_enable_ANGLE_instanced_arrays", "webgl_enable_OES_vertex_array_object", "webgl_enable_WEBGL_draw_buffers", "webgl_enable_WEBGL_multi_draw", "emscriptenWebGLGet", "computeUnpackAlignedImageSize", "colorChannelsInGlTextureFormat", "emscriptenWebGLGetTexPixelData", "__glGenObject", "emscriptenWebGLGetUniform", "webglGetUniformLocation", "webglPrepareUniformLocationsBeforeFirstUse", "webglGetLeftBracePos", "emscriptenWebGLGetVertexAttrib", "__glGetActiveAttribOrUniform", "writeGLArray", "emscripten_webgl_destroy_context_before_on_calling_thread", "registerWebGlEventCallback", "runAndAbortIfError", "SDL_unicode", "SDL_ttfContext", "SDL_audio", "GLFW_Window", "ALLOC_NORMAL", "ALLOC_STACK", "allocate", "writeStringToMemory", "writeAsciiToMemory" ];
+var missingLibrarySymbols = [ "isLeapYear", "ydayFromDate", "arraySum", "addDays", "setErrNo", "inetPton4", "inetNtop4", "inetPton6", "inetNtop6", "readSockaddr", "writeSockaddr", "getHostByName", "initRandomFill", "randomFill", "traverseStack", "getCallstack", "emscriptenLog", "convertPCtoSourceLocation", "readEmAsmArgs", "jstoi_q", "jstoi_s", "getExecutableName", "listenOnce", "autoResumeAudioContext", "dynCallLegacy", "getDynCaller", "dynCall", "runtimeKeepalivePop", "safeSetTimeout", "asmjsMangle", "asyncLoad", "alignMemory", "mmapAlloc", "HandleAllocator", "getNativeTypeSize", "STACK_SIZE", "STACK_ALIGN", "POINTER_SIZE", "ASSERTIONS", "writeI53ToI64", "writeI53ToI64Clamped", "writeI53ToI64Signaling", "writeI53ToU64Clamped", "writeI53ToU64Signaling", "readI53FromI64", "readI53FromU64", "convertI32PairToI53", "convertI32PairToI53Checked", "convertU32PairToI53", "uleb128Encode", "sigToWasmTypes", "generateFuncType", "convertJsFunctionToWasm", "getEmptyTableSlot", "updateTableMap", "getFunctionAddress", "addFunction", "removeFunction", "reallyNegative", "unSign", "strLen", "reSign", "formatString", "intArrayFromString", "intArrayToString", "AsciiToString", "stringToAscii", "UTF16ToString", "stringToUTF16", "lengthBytesUTF16", "UTF32ToString", "stringToUTF32", "lengthBytesUTF32", "stringToNewUTF8", "getSocketFromFD", "getSocketAddress", "registerKeyEventCallback", "maybeCStringToJsString", "findEventTarget", "findCanvasEventTarget", "getBoundingClientRect", "fillMouseEventData", "registerMouseEventCallback", "registerWheelEventCallback", "registerUiEventCallback", "registerFocusEventCallback", "fillDeviceOrientationEventData", "registerDeviceOrientationEventCallback", "fillDeviceMotionEventData", "registerDeviceMotionEventCallback", "screenOrientation", "fillOrientationChangeEventData", "registerOrientationChangeEventCallback", "fillFullscreenChangeEventData", "registerFullscreenChangeEventCallback", "JSEvents_requestFullscreen", "JSEvents_resizeCanvasForFullscreen", "registerRestoreOldStyle", "hideEverythingExceptGivenElement", "restoreHiddenElements", "setLetterbox", "softFullscreenResizeWebGLRenderTarget", "doRequestFullscreen", "fillPointerlockChangeEventData", "registerPointerlockChangeEventCallback", "registerPointerlockErrorEventCallback", "requestPointerLock", "fillVisibilityChangeEventData", "registerVisibilityChangeEventCallback", "registerTouchEventCallback", "fillGamepadEventData", "registerGamepadEventCallback", "registerBeforeUnloadEventCallback", "fillBatteryEventData", "battery", "registerBatteryEventCallback", "setCanvasElementSizeCallingThread", "setCanvasElementSizeMainThread", "setCanvasElementSize", "getCanvasSizeCallingThread", "getCanvasSizeMainThread", "getCanvasElementSize", "demangle", "demangleAll", "jsStackTrace", "stackTrace", "getEnvStrings", "checkWasiClock", "wasiRightsToMuslOFlags", "wasiOFlagsToMuslOFlags", "createDyncallWrapper", "setImmediateWrapped", "clearImmediateWrapped", "polyfillSetImmediate", "getPromise", "makePromise", "idsToPromises", "makePromiseCallback", "ExceptionInfo", "setMainLoop", "FS_createPreloadedFile", "FS_modeStringToFlags", "FS_getMode", "_setNetworkCallback", "heapObjectForWebGLType", "heapAccessShiftForWebGLHeap", "webgl_enable_ANGLE_instanced_arrays", "webgl_enable_OES_vertex_array_object", "webgl_enable_WEBGL_draw_buffers", "webgl_enable_WEBGL_multi_draw", "emscriptenWebGLGet", "computeUnpackAlignedImageSize", "colorChannelsInGlTextureFormat", "emscriptenWebGLGetTexPixelData", "__glGenObject", "emscriptenWebGLGetUniform", "webglGetUniformLocation", "webglPrepareUniformLocationsBeforeFirstUse", "webglGetLeftBracePos", "emscriptenWebGLGetVertexAttrib", "__glGetActiveAttribOrUniform", "writeGLArray", "emscripten_webgl_destroy_context_before_on_calling_thread", "registerWebGlEventCallback", "runAndAbortIfError", "SDL_unicode", "SDL_ttfContext", "SDL_audio", "GLFW_Window", "ALLOC_NORMAL", "ALLOC_STACK", "allocate", "writeStringToMemory", "writeAsciiToMemory" ];
 
 missingLibrarySymbols.forEach(missingLibrarySymbol);
 
-var unexportedSymbols = [ "run", "addOnPreRun", "addOnInit", "addOnPreMain", "addOnExit", "addOnPostRun", "addRunDependency", "removeRunDependency", "FS_createFolder", "FS_createPath", "FS_createDataFile", "FS_createPreloadedFile", "FS_createLazyFile", "FS_createLink", "FS_createDevice", "FS_unlink", "out", "err", "callMain", "abort", "stackAlloc", "stackSave", "stackRestore", "getTempRet0", "setTempRet0", "GROWABLE_HEAP_I8", "GROWABLE_HEAP_U8", "GROWABLE_HEAP_I16", "GROWABLE_HEAP_U16", "GROWABLE_HEAP_I32", "GROWABLE_HEAP_U32", "GROWABLE_HEAP_F32", "GROWABLE_HEAP_F64", "writeStackCookie", "checkStackCookie", "ptrToString", "zeroMemory", "exitJS", "getHeapMax", "abortOnCannotGrowMemory", "emscripten_realloc_buffer", "ENV", "MONTH_DAYS_REGULAR", "MONTH_DAYS_LEAP", "MONTH_DAYS_REGULAR_CUMULATIVE", "MONTH_DAYS_LEAP_CUMULATIVE", "ERRNO_CODES", "ERRNO_MESSAGES", "DNS", "Protocols", "Sockets", "timers", "warnOnce", "UNWIND_CACHE", "readEmAsmArgsArray", "handleException", "runtimeKeepalivePush", "callUserCallback", "maybeExit", "getCFunc", "freeTableIndexes", "functionsInTableMap", "setValue", "getValue", "PATH", "PATH_FS", "UTF8Decoder", "UTF8ArrayToString", "UTF8ToString", "stringToUTF8Array", "stringToUTF8", "lengthBytesUTF8", "UTF16Decoder", "stringToUTF8OnStack", "writeArrayToMemory", "SYSCALLS", "JSEvents", "specialHTMLTargets", "currentFullscreenStrategy", "restoreOldWindowedStyle", "flush_NO_FILESYSTEM", "dlopenMissingError", "promiseMap", "uncaughtExceptionCount", "exceptionLast", "exceptionCaught", "Browser", "wget", "FS", "MEMFS", "TTY", "PIPEFS", "SOCKFS", "tempFixedLengthArray", "miniTempWebGLFloatBuffers", "miniTempWebGLIntBuffers", "GL", "emscripten_webgl_power_preferences", "AL", "GLUT", "EGL", "GLEW", "IDBStore", "SDL", "SDL_gfx", "GLFW", "allocateUTF8", "allocateUTF8OnStack", "PThread", "terminateWorker", "killThread", "cleanupThread", "registerTLSInit", "cancelThread", "spawnThread", "exitOnMainThread", "proxyToMainThread", "emscripten_receive_on_main_thread_js_callArgs", "invokeEntryPoint", "checkMailbox" ];
+var unexportedSymbols = [ "run", "addOnPreRun", "addOnInit", "addOnPreMain", "addOnExit", "addOnPostRun", "addRunDependency", "removeRunDependency", "FS_createFolder", "FS_createPath", "FS_createDataFile", "FS_createLazyFile", "FS_createLink", "FS_createDevice", "FS_unlink", "out", "err", "callMain", "abort", "stackAlloc", "stackSave", "stackRestore", "getTempRet0", "setTempRet0", "GROWABLE_HEAP_I8", "GROWABLE_HEAP_U8", "GROWABLE_HEAP_I16", "GROWABLE_HEAP_U16", "GROWABLE_HEAP_I32", "GROWABLE_HEAP_U32", "GROWABLE_HEAP_F32", "GROWABLE_HEAP_F64", "writeStackCookie", "checkStackCookie", "ptrToString", "zeroMemory", "exitJS", "getHeapMax", "abortOnCannotGrowMemory", "emscripten_realloc_buffer", "ENV", "MONTH_DAYS_REGULAR", "MONTH_DAYS_LEAP", "MONTH_DAYS_REGULAR_CUMULATIVE", "MONTH_DAYS_LEAP_CUMULATIVE", "ERRNO_CODES", "ERRNO_MESSAGES", "DNS", "Protocols", "Sockets", "timers", "warnOnce", "UNWIND_CACHE", "readEmAsmArgsArray", "handleException", "runtimeKeepalivePush", "callUserCallback", "maybeExit", "getCFunc", "freeTableIndexes", "functionsInTableMap", "setValue", "getValue", "PATH", "PATH_FS", "UTF8Decoder", "UTF8ArrayToString", "UTF8ToString", "stringToUTF8Array", "stringToUTF8", "lengthBytesUTF8", "UTF16Decoder", "stringToUTF8OnStack", "writeArrayToMemory", "SYSCALLS", "JSEvents", "specialHTMLTargets", "currentFullscreenStrategy", "restoreOldWindowedStyle", "flush_NO_FILESYSTEM", "dlopenMissingError", "promiseMap", "uncaughtExceptionCount", "exceptionLast", "exceptionCaught", "Browser", "wget", "preloadPlugins", "FS", "MEMFS", "TTY", "PIPEFS", "SOCKFS", "tempFixedLengthArray", "miniTempWebGLFloatBuffers", "miniTempWebGLIntBuffers", "GL", "emscripten_webgl_power_preferences", "AL", "GLUT", "EGL", "GLEW", "IDBStore", "SDL", "SDL_gfx", "GLFW", "allocateUTF8", "allocateUTF8OnStack", "PThread", "terminateWorker", "killThread", "cleanupThread", "registerTLSInit", "cancelThread", "spawnThread", "exitOnMainThread", "proxyToMainThread", "emscripten_receive_on_main_thread_js_callArgs", "invokeEntryPoint", "checkMailbox" ];
 
 unexportedSymbols.forEach(unexportedRuntimeSymbol);
 

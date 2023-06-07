@@ -2035,6 +2035,10 @@ __attribute__((used)) struct ChunkCache *set_world_before(
 {
 	pause_thread();
 
+	octree_free_chunks_recursive(
+			&generationOctree, 0.0f, 0,
+			0, 0, 0, 1 << 10);
+
 	// everything has to be completely remade
 	generationOctree.count = 0;
 	uint8_t *progress2DGeneration = generationOctree.data;
@@ -2045,9 +2049,11 @@ __attribute__((used)) struct ChunkCache *set_world_before(
 	*nodeStackCount = 0;
 	nodestack_allocate(&generationOctree);
 	
+	/*
 	for (uint32_t i = 0; i < accelerationBufferSize/4; i++) {
 		accelerationBufferData[i] = 3u << 30;
 	}
+	*/
 	
 	free(chunkStack.voxels);
 	free(chunkStack.indices);
