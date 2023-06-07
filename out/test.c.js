@@ -260,9 +260,9 @@ function updateMemoryViews() {
  Module["HEAPF64"] = HEAPF64 = new Float64Array(b);
 }
 
-var INITIAL_MEMORY = Module["INITIAL_MEMORY"] || 16777216;
+var INITIAL_MEMORY = Module["INITIAL_MEMORY"] || 134217728;
 
-assert(INITIAL_MEMORY >= 65536, "INITIAL_MEMORY should be larger than STACK_SIZE, was " + INITIAL_MEMORY + "! (STACK_SIZE=" + 65536 + ")");
+assert(INITIAL_MEMORY >= 5242880, "INITIAL_MEMORY should be larger than STACK_SIZE, was " + INITIAL_MEMORY + "! (STACK_SIZE=" + 5242880 + ")");
 
 if (ENVIRONMENT_IS_PTHREAD) {
  wasmMemory = Module["wasmMemory"];
@@ -981,7 +981,7 @@ function ___pthread_create_js(pthread_ptr, attr, startRoutine, arg) {
 }
 
 function __emscripten_default_pthread_stack_size() {
- return 65536;
+ return 5242880;
 }
 
 var nowIsMonotonic = true;
@@ -1155,6 +1155,10 @@ function getHeapMax() {
  return 2147483648;
 }
 
+function abortOnCannotGrowMemory(requestedSize) {
+ abort("OOM");
+}
+
 function emscripten_realloc_buffer(size) {
  var b = wasmMemory.buffer;
  try {
@@ -1172,7 +1176,7 @@ function _emscripten_resize_heap(requestedSize) {
  }
  var maxHeapSize = getHeapMax();
  if (requestedSize > maxHeapSize) {
-  return false;
+  abortOnCannotGrowMemory(requestedSize);
  }
  let alignUp = (x, multiple) => x + (multiple - x % multiple) % multiple;
  for (var cutDown = 1; cutDown <= 4; cutDown *= 2) {
@@ -1184,7 +1188,7 @@ function _emscripten_resize_heap(requestedSize) {
    return true;
   }
  }
- return false;
+ abortOnCannotGrowMemory(requestedSize);
 }
 
 var printCharBuffers = [ null, [], [] ];
@@ -1388,6 +1392,38 @@ var _malloc = Module["_malloc"] = function() {
 
 var _jobs_setup = Module["_jobs_setup"] = function() {
  return (_jobs_setup = Module["_jobs_setup"] = Module["asm"]["jobs_setup"]).apply(null, arguments);
+};
+
+var _set_load_distance = Module["_set_load_distance"] = function() {
+ return (_set_load_distance = Module["_set_load_distance"] = Module["asm"]["set_load_distance"]).apply(null, arguments);
+};
+
+var _get_spawn_y = Module["_get_spawn_y"] = function() {
+ return (_get_spawn_y = Module["_get_spawn_y"] = Module["asm"]["get_spawn_y"]).apply(null, arguments);
+};
+
+var _unpause_thread = Module["_unpause_thread"] = function() {
+ return (_unpause_thread = Module["_unpause_thread"] = Module["asm"]["unpause_thread"]).apply(null, arguments);
+};
+
+var _get_seed = Module["_get_seed"] = function() {
+ return (_get_seed = Module["_get_seed"] = Module["asm"]["get_seed"]).apply(null, arguments);
+};
+
+var _get_chunkcache = Module["_get_chunkcache"] = function() {
+ return (_get_chunkcache = Module["_get_chunkcache"] = Module["asm"]["get_chunkcache"]).apply(null, arguments);
+};
+
+var _set_world_before = Module["_set_world_before"] = function() {
+ return (_set_world_before = Module["_set_world_before"] = Module["asm"]["set_world_before"]).apply(null, arguments);
+};
+
+var _set_world_after = Module["_set_world_after"] = function() {
+ return (_set_world_after = Module["_set_world_after"] = Module["asm"]["set_world_after"]).apply(null, arguments);
+};
+
+var _get_click_request = Module["_get_click_request"] = function() {
+ return (_get_click_request = Module["_get_click_request"] = Module["asm"]["get_click_request"]).apply(null, arguments);
 };
 
 var _init = Module["_init"] = function() {

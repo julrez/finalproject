@@ -7,14 +7,22 @@
 	color: white;
 	white-space: pre;
 }
+
+h1, h2, p, input {
+	font-family: "Audiowide", sans-serif;
+}
+
 canvas {
 	position: fixed;
 	top: 0;
 	left: 0;
 	margin: 0;
 	padding: 0;
+	width: 100%;
+	height: 100%;
+	z-index: 0;
 }
-#UIContainer {
+.UI {
 	position: fixed;
 	top: 0;
 	left: 0;
@@ -26,6 +34,9 @@ canvas {
 h1 {
 	text-align: center;
 	font-size: 4rem;
+	font-family: Arial, sans-serif;
+	color: white;
+	font-weight: bold;
 }
 .button {
 	display: inline-block;
@@ -34,7 +45,18 @@ h1 {
 	margin-left: 50%;
 	transform: translate(-50%, 0);
 	padding: 1em;
+	margin-bottom: 1em;
+	cursor: pointer;
 }
+.button h2 {
+	user-select: none;
+}
+
+.hide {
+	position: fixed;
+	top: -100vh;
+}
+
 h2 {
 	display: inline;
 	/*
@@ -46,4 +68,131 @@ h2 {
     -ms-user-select: none;
     user-select: none;
 	*/
+}
+
+#crosshair1 {
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	width: 2rem;
+	height: 0.2rem;
+	background-color: white;
+}
+#crosshair2 {
+	position: fixed;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	width: 0.2rem;
+	height: 2rem;
+	background-color: white;
+	outline: none;
+}
+
+#HUDContainer {
+	display: none;
+}
+
+#inventory {
+	position: fixed;
+	left: 0;
+	bottom: 1rem;
+	display: flex;
+	width: 100%;
+	justify-content: center;
+	/*transform: translate(-50%, 0%);*/
+}
+img {
+	width: 4vw;
+	border: 2px solid black;
+	margin: 0.2vh;
+    image-rendering: pixelated;
+}
+/* 
+ * this is the worst hack ever
+ * done to expand site so scroll events get made
+ * so I can get when scroll down and up is pressed
+ *
+ * TODO: I found out that a scroll wheel API exists, use that instead
+ */
+html {
+	height: calc(100% + 2px);
+	scrollbar-width: none;
+}
+html::-webkit-scrollbar {
+	display: none;
+}
+#settingsContainer {
+	display: none;
+}
+.panel {
+	display: grid;
+	grid-template-columns: 50% 50%;
+	background-color: white;
+	border-radius: 1em;
+	margin-left: auto;
+	margin-right: auto;
+	padding: 1em;
+	cursor: pointer;
+	margin-bottom: 1em;
+	width: 40vw;
+	/*height: 40vh;*/
+}
+.panel p {
+	margin-left: 0em;
+	margin-top: 0em;
+	padding: 0;
+	font-size: 2em;
+	position: relative;
+	display: inline;
+}
+
+.panelNumberInput {
+	margin-right: 0em !important;
+}
+.panelNumberInputContainer {
+	text-align: end;
+}
+
+.movingUnderscore::before {
+/*
+	text-decoration: underline;
+	text-underline-position: under;
+	text-decoration-color: red;
+	*/
+
+	content: "";
+	position: absolute;
+	top: 100%;
+	width: 100%;
+	left: 0;
+	height: 5px;
+	border-radius: 2px;
+	background: linear-gradient(90deg,
+        rgba(255, 0, 0, 1) 0%,
+        rgba(255, 154, 0, 1) 10%,
+        rgba(208, 222, 33, 1) 20%,
+        rgba(79, 220, 74, 1) 30%,
+        rgba(63, 218, 216, 1) 40%,
+        rgba(47, 201, 226, 1) 50%,
+        rgba(28, 127, 238, 1) 60%,
+        rgba(95, 21, 242, 1) 70%,
+        rgba(186, 12, 248, 1) 80%,
+        rgba(251, 7, 217, 1) 90%,
+        rgba(255, 0, 0, 1) 100%);
+	background-size: 800% 100%;
+	animation: movingGradient 6s linear infinite;
+}
+
+@keyframes movingGradient {
+	0% {
+		background-position: 0% 0%;
+	}
+	50% {
+		background-position: 100% 50%;
+	}
+	100% {
+		background-position: 0% 50%;
+	}
 }

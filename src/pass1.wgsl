@@ -185,7 +185,7 @@ fn main(@builtin(global_invocation_id) globalID: vec3<u32>)
 	// THIS IS WRONG BTW! TODO: send coords instead so pass2 can calculate tmin
 	// also: use only 1 textureStore
 	var color: vec4<u32>;
-	let depth = tmin*0.7f;
+	let depth = tmin*0.0f;
 	//let depth = 0f;
 	color = vec4<u32>(bitcast<u32>(depth), 0u, 0u, 0u);
 	// these many stores are not necessary

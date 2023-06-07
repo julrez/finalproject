@@ -1,18 +1,68 @@
 <!DOCTYPE html>
 <html lang="en">
 	<head>
-		<title>TODO: title</title>
+		<title>Shitty voxel sandbox</title>
 		<script src="src/main.js"></script>
 		<link rel="stylesheet" href="src/main.css"></link>
+		<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Audiowide">
+		<!--<link rel="icon" type="image/x-icon" href="/images/favicon.ico">-->
 	</head>
 	<body>
 		<canvas id="gameCanvas"></canvas>
-		<h3 id="debugString">FPS: INFINITE</h3>
+		<h3 id="debugString">debug</h3>
 	</body>
-	<main id="UIContainer">
-		<h1>Shit "game"</h1>
+	<main id="UIContainer" class="UI">
+		<h1>Shitty voxel sandbox</h1>
 		<div class="button" onclick="playOnClick()">
 			<h2>PLAY</h2>
 		</div>
+		<div class="button" onclick="settingsOnClick()">
+			<h2>SETTINGS</h2>
+		</div>
+		<label class="button" onclick="saveOnClick()">
+			<h2>SAVE</h2>
+		</label>
+		<label class="button">
+			<h2>LOAD</h2>
+			<input id="loadFile" type="file" class="hide" onchange="loadOnClick()">
+		</label>
 	</main>
+	<div id="HUDContainer" class="UI">
+		<div id="crosshair1"></div>
+		<div id="crosshair2"></div>
+		<div id="inventory">
+			<img id="inv0" src="static/inv0.png" alt="grass block">
+			<img id="inv1" src="static/inv1.png" alt="dirt block">
+			<img id="inv2" src="static/inv2.png" alt="stone block">
+			<img id="inv3" src="static/inv3.png" alt="tree block">
+			<img id="inv4" src="static/inv4.png" alt="leaves block">
+			<img id="inv5" src="static/inv5.png" alt="planks block">
+			<img id="inv6" src="static/inv6.png" alt="gravel block">
+			<img id="inv7" src="static/inv7.png" alt="brick block">
+			<img id="inv8" src="static/inv8.png" alt="light source block">
+		</div>
+	</div>
+	<div id="settingsContainer" class="UI">
+		<h1>Settings</h1>
+		<div class="panelContainer">
+			<div class="panel">
+				<p>Load distance: </p>
+				<div class="panelNumberInputContainer">
+					<p onmouseover="mouseOverSetting(0)" id="setting0" class="panelNumberInput">256</p>
+				</div>
+				<p>Show Debug Msg(1/0): </p>
+				<div class="panelNumberInputContainer">
+					<p onmouseover="mouseOverSetting(1)" id="setting1" class="panelNumberInput">104</p>
+				</div>
+				<p>Shadow resolution (%): </p>
+				<div class="panelNumberInputContainer">
+					<p onmouseover="mouseOverSetting(2)" id="setting2" class="panelNumberInput">104</p>
+				</div>
+			</div>
+			<div class="button" onclick="settingsDoneOnClick()">
+				<h2>DONE</h2>
+			</div>
+		</div>
+	</div>
 </html>
+

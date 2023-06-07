@@ -10,12 +10,18 @@ struct Constants {
 	vert3: vec3f,
 }
 
+struct LightBuffer {
+	count: u32,
+	bits: array<u32>,
+}
+
 @group(0) @binding(0) var outputTexture: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(1) var<uniform> constants: Constants;
 @group(0) @binding(2) var<storage, read> chunkBuffer: array<u32>;
 @group(0) @binding(3) var<storage, read> accelerationBuffer: array<u32>;
 @group(0) @binding(4) var depthTexture: texture_2d<f32>;
 @group(0) @binding(5) var colorTexture: texture_2d<u32>;
+@group(0) @binding(6) var<storage, read> lightBuffer: LightBuffer;
 
 /*
 @group(1) @binding(0) var<storage, read_write> debugInfo: DebugMsgInfo;
@@ -230,25 +236,55 @@ fn main(@builtin(global_invocation_id) globalID: vec3<u32>)
 	let specularStrength = 0.5f;
 
 	//let lightPos = vec3<f32>(1000f, 2000f, 5000f);
-	let lightPos = vec3<f32>(-6612.37984732f, 4207.50836314f, -6210.74118997f);
-	let lightDir = normalize(lightPos-originPos);
-	let viewDir = normalize(cameraPos-originPos);
+	var lightPos = vec3<f32>(-6612.37984732f, 4207.50836314f, -6210.74118997f);
+	var lightDir = normalize(lightPos-originPos);
+	var viewDir = normalize(cameraPos-originPos);
 
 	// TODO: do the precise thing again (bitcast)
-	let hit = cast_ray(originPos+normal*0.005, lightDir*32.0f);
-
+	var hit = cast_ray(originPos+normal*0.005, lightDir*32.0f);
+	
 	// from learnopengl.com
-	let reflectDir = reflect(-lightDir, normal);
-	let specular = specularStrength
+	var reflectDir = reflect(-lightDir, normal);
+	var specular = specularStrength
 		* pow(max(dot(viewDir, reflectDir), 0.0f), shininess);
 
-	let diffuse = max(dot(normal, lightDir), 0.0f);
-	let ambient = 0.3f;
+	var diffuse = max(dot(normal, lightDir), 0.0f);
+	var ambient = 0.1f;
 	var outputLighting = ambient;
 	if (hit) {
 		outputLighting += diffuse+specular;
 	}
-	// ambient
+
+/*
+	for (var i = 0u; i < 1; i++) {
+		lightPos = vec3(
+			f32(lightBuffer.bits[i<<1u] & 0xFFFFu)+0.5f,
+			f32(lightBuffer.bits[i<<1u] >> 16u)+0.5f,
+			f32(lightBuffer.bits[(i<<1u)+1u])+0.5f
+		);
+		
+		lightDir = normalize(lightPos-originPos);
+		diffuse = max(dot(normal, lightDir), 0.0f);
+		reflectDir = reflect(-lightDir, normal);
+		specular = specularStrength
+			* pow(max(dot(viewDir, reflectDir), 0.0f), shininess);
+		let dist = length(lightPos - originPos);
+		
+		let lightConstant = 1.0f;
+		let lightLinear = 0.09f;
+		let lightQuadratic = 0.032f;
+		let attenuation = 1.0f / (
+			lightConstant + 
+			lightLinear*dist +
+			lightQuadratic*dist*dist
+		);
+		ambient = 0.1f;
+		outputLighting += attenuation * ambient;
+		if (cast_ray(originPos+normal*0.005, lightDir*32.0f)) {
+			outputLighting += attenuation*(diffuse+specular);
+		}
+	}
+	*/
 
 	textureStore(outputTexture, vec2(globalID.xy), vec4(outputLighting, 0f, 0f, 0f));
 }

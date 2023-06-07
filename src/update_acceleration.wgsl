@@ -15,44 +15,44 @@ struct DebugMsgInfo {
 	debugMsgBuffer: array<u32>,
 }
 
-const DEBUG_TYPE_ASCII = 0u;
-const DEBUG_TYPE_F32 = 1u;
-const DEBUG_TYPE_U32 = 2u;
-const DEBUG_TYPE_START = 3u;
-const DEBUG_A = 97u;
-const DEBUG_B = 98u;
-const DEBUG_C = 99u;
-const DEBUG_D = 100u;
-const DEBUG_E = 101u;
-const DEBUG_F = 102u;
-const DEBUG_G = 103u;
-const DEBUG_H = 104u;
-const DEBUG_I = 105u;
-const DEBUG_J = 106u;
-const DEBUG_K = 107u;
-const DEBUG_L = 108u;
-const DEBUG_M = 109u;
-const DEBUG_N = 110u;
-const DEBUG_O = 111u;
-const DEBUG_P = 112u;
-const DEBUG_Q = 113u;
-const DEBUG_R = 114u;
-const DEBUG_S = 115u;
-const DEBUG_T = 116u;
-const DEBUG_U = 117u;
-const DEBUG_V = 118u;
-const DEBUG_W = 119u;
-const DEBUG_X = 120u;
-const DEBUG_Y = 121u;
-const DEBUG_Z = 122u;
-const DEBUG_SPACE = 32u;
-const DEBUG_COLON = 58u;
-const DEBUG_COMMA = 44u;
+const DEBUG_TYPE_ASCII = 0;
+const DEBUG_TYPE_F32 = 1;
+const DEBUG_TYPE_U32 = 2;
+const DEBUG_TYPE_START = 3;
+const DEBUG_A = 97;
+const DEBUG_B = 98;
+const DEBUG_C = 99;
+const DEBUG_D = 100;
+const DEBUG_E = 101;
+const DEBUG_F = 102;
+const DEBUG_G = 103;
+const DEBUG_H = 104;
+const DEBUG_I = 105;
+const DEBUG_J = 106;
+const DEBUG_K = 107;
+const DEBUG_L = 108;
+const DEBUG_M = 109;
+const DEBUG_N = 110;
+const DEBUG_O = 111;
+const DEBUG_P = 112;
+const DEBUG_Q = 113;
+const DEBUG_R = 114;
+const DEBUG_S = 115;
+const DEBUG_T = 116;
+const DEBUG_U = 117;
+const DEBUG_V = 118;
+const DEBUG_W = 119;
+const DEBUG_X = 120;
+const DEBUG_Y = 121;
+const DEBUG_Z = 122;
+const DEBUG_SPACE = 32;
+const DEBUG_COLON = 58;
+const DEBUG_COMMA = 44;
 fn debug_print(charType: u32, char: u32)
 {
-	let index = atomicAdd(&debugInfo.debugMsgBufferSize, 2u);
+	let index = atomicAdd(&debugInfo.debugMsgBufferSize, 2);
 	debugInfo.debugMsgBuffer[index] = charType;
-	debugInfo.debugMsgBuffer[index+1u] = char;
+	debugInfo.debugMsgBuffer[index+1] = char;
 }
 */
 

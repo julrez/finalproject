@@ -17,6 +17,10 @@ struct Constants {
  *         - 11: border/miss
  *         - 10: air/df
  *     - rest: index, acceleration data or voxel index
+ * 
+ * voxel format (LOD=0)
+ * - 5 bits = voxel type
+ * - 25 bits = lightmapInfoAddress
  */
 
 // outputTexture:
@@ -138,6 +142,7 @@ fn main(@builtin(global_invocation_id) globalID: vec3<u32>)
 	var t: vec3<f32>;
 	var newTmin: f32;
 	var i = 0;
+	var newPos: vec3<f32>;
 	for (; i < 256; i++) {
 		let accelerationIndex: u32 = (((gridPos.z >> 3u) << 16u) | ((gridPos.y >> 3u) << 8u) | (gridPos.x >> 3u));
 		
@@ -173,7 +178,7 @@ fn main(@builtin(global_invocation_id) globalID: vec3<u32>)
 		tmin = min(min(t.x, t.y), t.z);
 		//let newTmin = tmin+0.01;
 		newTmin = bitcast<f32>(bitcast<u32>(tmin)+1u);
-		var newPos = origin+rayDir*newTmin;
+		newPos = origin+rayDir*newTmin;
 		newPos.x = bitcast<f32>(bitcast<u32>(newPos.x)+addULP.x);
 		newPos.y = bitcast<f32>(bitcast<u32>(newPos.y)+addULP.y);
 		newPos.z = bitcast<f32>(bitcast<u32>(newPos.z)+addULP.z);
@@ -184,7 +189,7 @@ fn main(@builtin(global_invocation_id) globalID: vec3<u32>)
 	var color: vec4<u32>;
 	var depth: vec4<f32>;
 	if ((voxel & 3221225472u) == 0u) { // hit
-		color = vec4<u32>(voxel, 0u, 0u, 0u);
+		color = vec4<u32>(voxel & 31, 0u, 0u, 0u);
 		depth = vec4<f32>(newDepth, 0f, 0f, 0f);
 
 		// calculate which face intersected
@@ -197,9 +202,16 @@ fn main(@builtin(global_invocation_id) globalID: vec3<u32>)
 			color.g = 2u;
 		}
 	} else { // miss
-		color = vec4<u32>(0u, 0u, 0u, 0u);
+		color = vec4<u32>(255u, 0u, 0u, 0u);
 		depth = vec4<f32>(0f, 0f, 0f, 0f);
 	}
 	textureStore(outputTexture, vec2(globalID.xy), color);
 	textureStore(depthTexture, vec2(globalID.xy), depth);
+	
+	/*
+	if (globalID.x == 0 && globalID.y == 0) {
+		debug_print(DEBUG_TYPE_START, DEBUG_S);
+		debug_print(DEBUG_TYPE_ASCII, DEBUG_COLON);
+	}
+	*/
 }
