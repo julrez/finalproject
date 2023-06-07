@@ -239,6 +239,7 @@ function loadOnClick()
 			stackVoxels[i] = voxel;
 		}
 		
+		console.log("PLS");
 		var set_world_after = Module.cwrap("set_world_after", "number", []);
 		set_world_after();
 	});

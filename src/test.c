@@ -2074,15 +2074,16 @@ __attribute__((used)) struct ChunkCache *set_world_before(
 	seed = newSeed;
 	generate_heightmap(2048);
 	
-	octreeGenerateChunksCurrentDistance = 32;
-	octree_generate_chunks();
-
 	return &chunkCache;
 }
 
 __attribute__((used)) uint32_t set_world_after()
 {
 	chunkcache_resize(true);
+
+	octreeGenerateChunksCurrentDistance = 32;
+	octree_generate_chunks();
+
 	unpause_thread();
 	return 0;
 }

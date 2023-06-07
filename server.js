@@ -5,12 +5,13 @@ const {exec} = require('child_process');
 let files = {};
 
 //  -fsanitize=address 
-let debugFlags = " -s ASSERTIONS=1 -s STACK_OVERFLOW_CHECK=1 -s SAFE_HEAP=1 -s SAFE_HEAP_LOG=1";
-let releaseFlags = " -O3 -g -fdebug-compilation-dir='../../'";
+let debugFlags = " -s ASSERTIONS=1 -s STACK_OVERFLOW_CHECK=1 -s SAFE_HEAP=1 -s SAFE_HEAP_LOG=1 -O3 -g -fdebug-compilation-dir='../../'";
+let releaseFlags = " ";
 
 //let memoryFlags = " -s ALLOW_MEMORY_GROWTH=0 -s INITIAL_MEMORY=4294901760";
 let memoryFlags = " -s ALLOW_MEMORY_GROWTH=1 -s INITIAL_MEMORY=134217728";
 let emccFlags = "-Wall -Wextra -Wdouble-promotion -msimd128 -pthread -s WASM=1 -sSTACK_SIZE=5242880 -sABORTING_MALLOC=1 -sPTHREAD_POOL_SIZE=navigator.hardwareConcurrency -s EXPORTED_RUNTIME_METHODS=[\"cwrap\",\"ccall\"] -s EXPORTED_FUNCTIONS=[\"_malloc\"]" + memoryFlags + releaseFlags;
+
 
 let compile = true;
 
